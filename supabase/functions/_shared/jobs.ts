@@ -104,13 +104,18 @@ export async function storeRange(
     if (data["1m"].length) await store.saveIntraday(day, "1m", data["1m"], data.source);
     if (data.daily) await store.saveDaily(day, data.daily, data.source);
     const report: RangeReport = buildDayReport(day, data["1m"], data["15m"], data.daily);
-    if (data.daily) {
+    // Levels only from regular sessions. A special session (e.g. Diwali Muhurat, ~1 hour on a
+    // weekend/holiday) is stored and flagged, but must not replace the previous full day's levels.
+    if (data.daily && isTradingDay(day, holidays)) {
       const { target, lv } = await saveLevelsFromDaily(store, day, data.daily, holidays, band);
       report.levels_for = target;
       report.levels = lv;
     }
     if (!isTradingDay(day, holidays)) {
-      report.issues.push({ severity: "info", code: "non_trading_day", msg: "data found on a day marked as holiday/weekend (special session?)" });
+      report.issues.push({
+        severity: "info", code: "non_trading_day",
+        msg: "special session on a weekend/holiday (e.g. Muhurat trading): stored, but not used for levels",
+      });
     }
     const { levels: _omit, ...toSave } = report;
     await store.saveCheck(day, toSave);

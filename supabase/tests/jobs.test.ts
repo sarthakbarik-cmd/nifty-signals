@@ -1,7 +1,7 @@
 import * as jobs from "../functions/_shared/jobs.ts";
 import { daysBetween, weekday } from "../functions/_shared/time.ts";
 import { UpstoxAuthError } from "../functions/_shared/upstox.ts";
-import { eq, FakeClient, FakeStore, failing, ok, throws } from "./helpers.ts";
+import { eq, FakeClient, FakeStore, failing, makeDay, ok, throws } from "./helpers.ts";
 
 const TODAY = "2026-11-20"; // Friday
 
@@ -37,6 +37,26 @@ Deno.test("backfill chunks ≤28 days, skips weekends/holidays, computes levels"
   eq(reports.length, daysBetween("2026-09-01", "2026-11-19").filter((d) => weekday(d) < 5 && !hol.has(d)).length);
   ok(store.levels.has("2026-11-20") && store.levels.has("2026-11-05")); // Tue 3rd -> Thu 5th skips holiday 4th
   eq(store.levels.get("2026-11-05")!.based_on, "2026-11-03");
+});
+
+Deno.test("special weekend session (Muhurat) is stored but never used for levels", async () => {
+  // Fri 6 Nov full day, Sun 8 Nov one-hour Muhurat session, Mon 9 Nov is the next trading day.
+  const store = new FakeStore();
+  const client = new FakeClient(TODAY);
+  const realHist = client.historicalCandles.bind(client);
+  client.historicalCandles = async (k: string, unit: string, interval: number, a: string, b: string) => {
+    const rows = await realHist(k, unit, interval, a, b);
+    // add a short Sunday session to whatever was requested
+    const sun = makeDay("2026-11-08");
+    const extra = unit === "days" ? [sun.daily] : (interval === 1 ? sun.c1.slice(0, 70) : sun.c15.slice(0, 5));
+    return [...rows, ...extra];
+  };
+  const reports = await jobs.storeRange(client as any, store, "2026-11-06", "2026-11-09", TODAY, new Set());
+  const sunday = reports.find((r) => r.date === "2026-11-08")!;
+  ok(sunday && sunday.levels_for === undefined, "Muhurat day must not produce levels");
+  ok(sunday.issues.some((i) => i.code === "non_trading_day"));
+  ok(store.intraday.has("2026-11-08|15m"), "special-session candles are still stored");
+  eq(store.levels.get("2026-11-09")!.based_on, "2026-11-06"); // Monday's levels come from Friday
 });
 
 Deno.test("unknown holiday is reported, stored data never overwritten with empty", async () => {
