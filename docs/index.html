@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Nifty Signals</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Nifty Signals <span class="tag">Phase 2 · Levels</span></h1>
+    <div id="user-box"></div>
+  </header>
+
+  <main>
+    <section id="signed-out" class="card hidden">
+      <h2>Sign in</h2>
+      <form id="signin-form" class="signin">
+        <label>Email <input type="email" id="si-email" autocomplete="username" required /></label>
+        <label>Password <input type="password" id="si-password" autocomplete="current-password" required /></label>
+        <button id="btn-signin" class="primary" type="submit">Sign in</button>
+      </form>
+      <p id="signin-error" class="error"></p>
+      <p class="hint">Owner account only (created in Supabase → Authentication → Users).</p>
+    </section>
+
+    <div id="app" class="hidden">
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="today" aria-selected="true">Today</button>
+        <button role="tab" data-tab="data" aria-selected="false">Data</button>
+      </nav>
+
+      <!-- ================= TODAY ================= -->
+      <div id="tab-today">
+        <section class="card">
+          <h2>Upstox</h2>
+          <div id="upstox-status" class="status">Loading…</div>
+          <button id="btn-upstox" class="primary">Login to Upstox</button>
+          <p class="hint">The Upstox token expires every day at 03:30 IST. Log in each morning before 09:20.</p>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2>Levels</h2>
+            <div class="row tight">
+              <button id="btn-lv-prev" aria-label="Previous levels">◀</button>
+              <input type="date" id="lv-date" />
+              <button id="btn-lv-next" aria-label="Next levels">▶</button>
+            </div>
+          </div>
+          <div id="levels"></div>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <h2 id="chart-title">Chart</h2>
+            <button id="btn-live">Refresh</button>
+          </div>
+          <div id="lv-chart" class="chart-box"></div>
+          <div id="lv-legend" class="legend"></div>
+        </section>
+      </div>
+
+      <!-- ================= DATA ================= -->
+      <div id="tab-data" class="hidden">
+        <section class="card">
+          <h2>Fetch candles</h2>
+          <p class="hint">Fetch, store and check index candles (15-min, 1-min, daily) for a date range, and compute
+            each next day's levels. Max 62 days per run. Today is available after 15:31 IST.</p>
+          <div class="row">
+            <label>From <input type="date" id="bf-from" /></label>
+            <label>To <input type="date" id="bf-to" /></label>
+            <button id="btn-backfill">Fetch</button>
+          </div>
+          <div id="bf-result"></div>
+        </section>
+
+        <section class="card">
+          <h2>Day check</h2>
+          <div class="row">
+            <input type="date" id="day" />
+            <button id="btn-day-prev" aria-label="Previous day">◀</button>
+            <button id="btn-day-next" aria-label="Next day">▶</button>
+          </div>
+          <div id="day-check"></div>
+          <div id="chart" class="chart-box"></div>
+          <details>
+            <summary>15-min candles</summary>
+            <div class="table-wrap"><table id="tbl-15m"></table></div>
+          </details>
+        </section>
+
+        <section class="card">
+          <h2>Recent logs</h2>
+          <ul id="logs" class="logs"></ul>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <div id="tooltip" class="tooltip hidden" role="status"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.0/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
