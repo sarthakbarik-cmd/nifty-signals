@@ -100,7 +100,7 @@ export class UpstoxClient {
     throw last!;
   }
 
-  async profile(): Promise<{ user_name?: string }> { return (await this.get("/v2/user/profile")).data ?? {}; }
+  async profile(): Promise<{ user_name?: string; user_id?: string }> { return (await this.get("/v2/user/profile")).data ?? {}; }
 
   /** Historical Candle V3. For 1–15 minute candles one request may span at most one month. */
   async historicalCandles(key: string, unit: string, interval: number, from: string, to: string): Promise<Candle[]> {

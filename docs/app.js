@@ -108,6 +108,21 @@ async function loadUpstoxStatus() {
   }
 }
 
+$("btn-upstox-request").onclick = async (ev) => {
+  const msg = $("upstox-request-msg");
+  ev.target.disabled = true;
+  try {
+    const r = await api("request_token");
+    msg.textContent = r.sent
+      ? "Sent. Open the Upstox app (or WhatsApp) and tap Approve, then refresh this page."
+      : `Not sent: ${r.reason}.`;
+  } catch (e) {
+    msg.textContent = "Could not send the request: " + e.message;
+  } finally {
+    ev.target.disabled = false;
+  }
+};
+
 $("btn-upstox").onclick = async (ev) => {
   ev.target.disabled = true;
   try {

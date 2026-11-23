@@ -4,7 +4,8 @@
 //   • pg_cron:   header x-cron-secret == the random secret in Vault  -> premarket_check, daily_levels
 //   • dashboard: Authorization: Bearer <owner's Supabase JWT>        -> every action below
 //
-// Actions: premarket_check | daily_levels | login_url | backfill {from,to} | refresh_premarket | today_candles | status
+// Actions: premarket_check | daily_levels | request_token | test_telegram | login_url | backfill {from,to}
+//          | refresh_premarket | today_candles | status
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { buildChartSvg } from "../_shared/chart.ts";
 import * as jobs from "../_shared/jobs.ts";
@@ -14,6 +15,7 @@ import { sendTelegram, sendTelegramPhoto } from "../_shared/notify.ts";
 import { svgToPng } from "../_shared/render.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { istParts, isTradingDay, todayIst } from "../_shared/time.ts";
+import { startTokenRequest, type TokenRequestState } from "../_shared/tokenflow.ts";
 import { buildAuthorizeUrl, NIFTY_INDEX_KEY, UpstoxAuthError, UpstoxClient, UpstoxError } from "../_shared/upstox.ts";
 
 const CORS = {
@@ -93,6 +95,28 @@ async function testTelegram(store: SupabaseStore): Promise<Record<string, unknow
   return { levels_date: lv.date, morning, evening };
 }
 
+/** Ask Upstox to send an approval request to the owner's phone (Upstox app + WhatsApp). */
+async function requestToken(store: SupabaseStore, by: TokenRequestState["by"]) {
+  return await startTokenRequest(store, env("UPSTOX_API_KEY"), env("UPSTOX_API_SECRET"), by);
+}
+
+/** 08:45 IST on trading days: send the approval request so the token is ready before 09:20. */
+async function scheduledTokenRequest(store: SupabaseStore): Promise<Record<string, unknown>> {
+  const today = todayIst();
+  const holidays = await jobs.resolveHolidays(new UpstoxClient(null), store, today);
+  if (!isTradingDay(today, holidays)) return { skipped: "not a trading day" };
+  const app = await store.app();
+  try {
+    const r = await requestToken(store, "schedule");
+    if (r.sent) await telegram(`📲 Good morning! Approve the Upstox request on your phone (Upstox app or WhatsApp) to start today's signals.\nOr log in on the dashboard: ${app.dashboard_url ?? ""}`);
+    return r;
+  } catch (e) {
+    await store.log("token_request", "error", (e as Error).message);
+    await telegram(`⚠️ Couldn't send the Upstox approval request: ${(e as Error).message.slice(0, 200)}\nPlease log in on the dashboard: ${app.dashboard_url ?? ""}`);
+    return { sent: false, reason: (e as Error).message };
+  }
+}
+
 // --------------------------------------------------------------------------- scheduled jobs
 async function premarketCheck(store: SupabaseStore): Promise<Record<string, unknown>> {
   const app = await store.app();
@@ -106,8 +130,12 @@ async function premarketCheck(store: SupabaseStore): Promise<Record<string, unkn
   const [ok, detail] = await jobs.checkToken(client, store);
   await store.log("premarket_check", ok ? "info" : "warn", `Token check: ${detail}`);
   if (!ok) {
-    await telegram(`⏰ Upstox not logged in (${detail}). Log in before signals can run:\n${app.dashboard_url ?? ""}`);
-    return { token: false, detail };
+    let resent = false;
+    try { resent = (await requestToken(store, "reminder")).sent; } catch (e) { await store.log("token_request", "warn", (e as Error).message); }
+    await telegram(resent
+      ? `⏰ Upstox is not approved yet, so today's plan can't run. I've sent the approval request to your phone again (Upstox app / WhatsApp).\nOr log in on the dashboard: ${app.dashboard_url ?? ""}`
+      : `⏰ Upstox not logged in (${detail}). Log in before signals can run:\n${app.dashboard_url ?? ""}`);
+    return { token: false, detail, resent };
   }
   const res = await jobs.runPremarket(client, store, today, holidays, await settingsBand(store));
   await sendMorning(store, today, res, res.oi_spot, res.instruments);
@@ -200,6 +228,7 @@ Deno.serve(async (req) => {
       if (action === "premarket_check") return json(await runJob(store, action, premarketCheck));
       if (action === "daily_levels") return json(await runJob(store, action, dailyLevels));
       if (action === "test_telegram") return json(await testTelegram(store));
+      if (action === "request_token") return json(await scheduledTokenRequest(store));
       throw new HttpError(400, `Unknown scheduled action: ${action}`);
     }
 
@@ -253,6 +282,11 @@ Deno.serve(async (req) => {
 
       case "test_telegram":
         return json(await testTelegram(store));
+
+      case "request_token": {
+        try { return json(await requestToken(store, "dashboard")); }
+        catch (e) { throw new HttpError(502, (e as Error).message); }
+      }
 
       // Manual "run now" of the scheduled jobs, for testing from the dashboard.
       case "premarket_check":

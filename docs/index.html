@@ -35,8 +35,13 @@
         <section class="card">
           <h2>Upstox</h2>
           <div id="upstox-status" class="status">Loading…</div>
-          <button id="btn-upstox" class="primary">Login to Upstox</button>
-          <p class="hint">The Upstox token expires every day at 03:30 IST. Log in each morning before 09:20.</p>
+          <div class="row">
+            <button id="btn-upstox-request" class="primary">📲 Send approval to my phone</button>
+            <button id="btn-upstox">Login to Upstox</button>
+          </div>
+          <p id="upstox-request-msg" class="hint"></p>
+          <p class="hint">The Upstox token expires every day at 03:30 IST. At 08:45 on trading days an approval request is sent
+            to your Upstox app and WhatsApp automatically — just tap Approve. The Login button is the backup.</p>
         </section>
 
         <section class="card">
