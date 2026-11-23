@@ -87,6 +87,27 @@ export class SupabaseStore implements Store {
   async getDaily(date: string): Promise<Candle | null> {
     return check(await this.db.from("candles_daily").select("t,o,h,l,c,v,oi").eq("date", date).maybeSingle(), "get daily");
   }
+  async getIntraday(date: string, key: "15m" | "1m"): Promise<Candle[]> {
+    const d = check(await this.db.from(key === "15m" ? "candles_15m" : "candles_1m").select("candles").eq("date", date).maybeSingle(), `get ${key}`);
+    return (d?.candles as Candle[]) ?? [];
+  }
+  async getCheck(date: string): Promise<(DayReport & { levels_for: string | null }) | null> {
+    return check(await this.db.from("data_checks").select("date,status,counts,daily,issues,levels_for").eq("date", date).maybeSingle(), "get check");
+  }
+  /** Levels + OI for a session, or the latest session on/before `onOrBefore` when date is omitted. */
+  async getLevelsFull(opts: { date?: string; onOrBefore?: string }) {
+    let q = this.db.from("levels").select("*").not("p", "is", null);
+    q = opts.date ? q.eq("date", opts.date) : q.lte("date", opts.onOrBefore!).order("date", { ascending: false }).limit(1);
+    const rows = check(await q, "get levels full") as any[];
+    const d = rows?.[0];
+    if (!d) return null;
+    return {
+      date: d.date as string,
+      P: d.p, BC: d.bc, TC: d.tc, R1: d.r1, R2: d.r2, S1: d.s1, S2: d.s2, PDH: d.pdh, PDL: d.pdl, PDC: d.pdc,
+      cpr_width: d.cpr_width, no_trade: d.no_trade, based_on: d.based_on as string,
+      maxCallOI: d.max_call_oi as number | null, maxPutOI: d.max_put_oi as number | null, oi_spot: d.oi_spot as number | null,
+    };
+  }
   async saveCheck(date: string, r: DayReport & { levels_for?: string }) {
     check(await this.db.from("data_checks").upsert({
       date, status: r.status, counts: r.counts, daily: r.daily, issues: r.issues, levels_for: r.levels_for ?? null,

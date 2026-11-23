@@ -6,8 +6,12 @@
 //
 // Actions: premarket_check | daily_levels | login_url | backfill {from,to} | refresh_premarket | today_candles | status
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { buildChartSvg } from "../_shared/chart.ts";
 import * as jobs from "../_shared/jobs.ts";
-import { sendTelegram } from "../_shared/notify.ts";
+import type { ExpiryCache } from "../_shared/levels.ts";
+import { BADGE, dayLabel, dayShort, eveningReport, type LevelsWithOi, morningPlan } from "../_shared/messages.ts";
+import { sendTelegram, sendTelegramPhoto } from "../_shared/notify.ts";
+import { svgToPng } from "../_shared/render.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { istParts, isTradingDay, todayIst } from "../_shared/time.ts";
 import { buildAuthorizeUrl, NIFTY_INDEX_KEY, UpstoxAuthError, UpstoxClient, UpstoxError } from "../_shared/upstox.ts";
@@ -31,6 +35,64 @@ async function settingsBand(store: SupabaseStore): Promise<number> {
   return Number((await store.settings()).no_trade_band ?? 20);
 }
 
+async function cprCfg(store: SupabaseStore) {
+  const s = await store.settings();
+  return { narrow: Number(s.cpr_narrow_pct ?? 0.25), wide: Number(s.cpr_wide_pct ?? 0.5) };
+}
+
+const fmt0 = (x: number) => Math.round(x).toLocaleString("en-IN");
+
+/** 09:20 message: plain-language plan + chart (previous day's candles, today's levels, now line). */
+async function sendMorning(store: SupabaseStore, today: string, lv: LevelsWithOi, price: number, inst: ExpiryCache | null, prefix = "") {
+  const { text, bias } = morningPlan(today, lv, price, inst, await cprCfg(store));
+  const { svg } = buildChartSvg({
+    title: `NIFTY plan · ${dayLabel(today)}`,
+    subtitle: `Candles: ${dayLabel(lv.based_on)} (15-min)  ·  Levels for ${dayLabel(today)}  ·  Nifty ${fmt0(price)} at 09:20`,
+    badge: { text: BADGE[bias], tone: bias }, candles: await store.getIntraday(lv.based_on, "15m"),
+    levels: lv, prevName: dayShort(lv.based_on), now: { price },
+  });
+  const png = await svgToPng(svg);
+  const app = await store.app();
+  await sendTelegramPhoto(env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID"), prefix + text, png, app.dashboard_url);
+  return { chart: Boolean(png), chars: (prefix + text).length };
+}
+
+/** 15:45 message: data check + next trading day's levels + chart (today's candles, next day's levels). */
+async function sendEvening(store: SupabaseStore, report: Parameters<typeof eveningReport>[0], next: string | null,
+  lv: LevelsWithOi | null, holidays: Set<string>, prefix = "") {
+  const text = prefix + eveningReport(report, next, lv, holidays, await cprCfg(store));
+  let png: Uint8Array | null = null;
+  if (next && lv) {
+    const { svg } = buildChartSvg({
+      title: `NIFTY · ${dayLabel(report.date)} close`,
+      subtitle: `Candles: ${dayLabel(report.date)} (15-min)  ·  Levels for ${dayLabel(next)}`,
+      badge: { text: `Plan for ${dayLabel(next)}`, tone: "info" }, candles: await store.getIntraday(report.date, "15m"),
+      levels: lv, prevName: dayShort(report.date), now: null,
+    });
+    png = await svgToPng(svg);
+  }
+  const app = await store.app();
+  await sendTelegramPhoto(env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID"), text, png, app.dashboard_url);
+  return { chart: Boolean(png), chars: text.length };
+}
+
+/** Sends both messages, marked TEST, from the latest stored data. Changes nothing in the database. */
+async function testTelegram(store: SupabaseStore): Promise<Record<string, unknown>> {
+  const today = todayIst();
+  const client = new UpstoxClient(null);
+  const holidays = await jobs.resolveHolidays(client, store, today);
+  const lv = await store.getLevelsFull({ onOrBefore: today });
+  if (!lv) throw new HttpError(412, "No levels stored yet.");
+  const inst = await store.getConfig<ExpiryCache>("instruments");
+  const price = lv.oi_spot ?? lv.PDC;
+  const morning = await sendMorning(store, lv.date, lv, price, inst?.for_date === lv.date ? inst : null, "🧪 TEST (sample of the 09:20 message)\n\n");
+  const check = await store.getCheck(lv.based_on);
+  const evening = check
+    ? await sendEvening(store, check, lv.date, { ...lv, maxCallOI: null, maxPutOI: null }, holidays, "🧪 TEST (sample of the 15:45 message)\n\n")
+    : null;
+  return { levels_date: lv.date, morning, evening };
+}
+
 // --------------------------------------------------------------------------- scheduled jobs
 async function premarketCheck(store: SupabaseStore): Promise<Record<string, unknown>> {
   const app = await store.app();
@@ -48,7 +110,7 @@ async function premarketCheck(store: SupabaseStore): Promise<Record<string, unkn
     return { token: false, detail };
   }
   const res = await jobs.runPremarket(client, store, today, holidays, await settingsBand(store));
-  await telegram(jobs.formatLevels(today, res));
+  await sendMorning(store, today, res, res.oi_spot, res.instruments);
   return { token: true, maxCallOI: res.maxCallOI, maxPutOI: res.maxPutOI, trade_expiry: res.instruments.trade_expiry, lot_size: res.instruments.lot_size };
 }
 
@@ -68,9 +130,7 @@ async function dailyLevels(store: SupabaseStore): Promise<Record<string, unknown
     return { token: false };
   }
   const report = await jobs.runEod(client, store, today, holidays, await settingsBand(store));
-  let msg = jobs.formatReport(report);
-  if (report.levels) msg += "\n\n" + jobs.formatLevels(report.levels_for!, report.levels);
-  await telegram(msg);
+  await sendEvening(store, report, report.levels_for ?? null, report.levels ?? null, holidays);
   return { status: report.status, counts: report.counts, levels_for: report.levels_for };
 }
 
@@ -139,6 +199,7 @@ Deno.serve(async (req) => {
       if (!(await store.checkCronSecret(cronSecret))) throw new HttpError(401, "Bad scheduler secret.");
       if (action === "premarket_check") return json(await runJob(store, action, premarketCheck));
       if (action === "daily_levels") return json(await runJob(store, action, dailyLevels));
+      if (action === "test_telegram") return json(await testTelegram(store));
       throw new HttpError(400, `Unknown scheduled action: ${action}`);
     }
 
@@ -189,6 +250,9 @@ Deno.serve(async (req) => {
         const rows = await upstoxCall(store, "today_candles", () => client.intradayCandles(NIFTY_INDEX_KEY, "minutes", 15));
         return json({ date: today, candles: rows.filter((c) => c.t.startsWith(today)) });
       }
+
+      case "test_telegram":
+        return json(await testTelegram(store));
 
       // Manual "run now" of the scheduled jobs, for testing from the dashboard.
       case "premarket_check":
