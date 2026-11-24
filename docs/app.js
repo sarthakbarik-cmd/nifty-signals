@@ -95,27 +95,57 @@ async function onUser(user) {
 }
 
 // ---------- Upstox login
+/** Updates the Upstox box; returns true when logged in. */
 async function loadUpstoxStatus() {
   const s = await config("upstox_status");
   const el = $("upstox-status");
   const exp = s?.expires_at ? new Date(s.expires_at) : null;
-  if (s?.logged_in && exp && exp > new Date()) {
+  const ok = Boolean(s?.logged_in && exp && exp > new Date());
+  if (ok) {
     el.className = "status ok";
     el.textContent = `Logged in${s.user_name ? " as " + s.user_name : ""} · valid until ${fmtTime(exp)} IST`;
   } else {
     el.className = "status err";
     el.textContent = s?.invalid_reason ? `Not logged in (${s.invalid_reason})` : "Not logged in";
   }
+  return ok;
 }
+
+// After an approval request: check every 4 s (up to 3 min) and turn green by itself.
+let approvalWatch = null;
+function watchForApproval() {
+  clearInterval(approvalWatch);
+  const msg = $("upstox-request-msg");
+  const started = Date.now();
+  approvalWatch = setInterval(async () => {
+    try {
+      if (await loadUpstoxStatus()) {
+        clearInterval(approvalWatch);
+        msg.textContent = "✅ Approved — you're logged in.";
+      } else if (Date.now() - started > 180_000) {
+        clearInterval(approvalWatch);
+        msg.textContent = "Still waiting for approval. Approve in the Upstox app / WhatsApp, or use Login to Upstox.";
+      }
+    } catch { /* network blip: try again on the next tick */ }
+  }, 4000);
+}
+
+// Coming back to this tab (e.g. from WhatsApp) re-checks the login straight away.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && shownFor) loadUpstoxStatus().catch(() => {});
+});
 
 $("btn-upstox-request").onclick = async (ev) => {
   const msg = $("upstox-request-msg");
   ev.target.disabled = true;
   try {
     const r = await api("request_token");
-    msg.textContent = r.sent
-      ? "Sent. Open the Upstox app (or WhatsApp) and tap Approve, then refresh this page."
-      : `Not sent: ${r.reason}.`;
+    if (r.sent) {
+      msg.textContent = "Sent. Open the Upstox app (or WhatsApp) and tap Approve — this page will update by itself.";
+      watchForApproval();
+    } else {
+      msg.textContent = `Not sent: ${r.reason}.`;
+    }
   } catch (e) {
     msg.textContent = "Could not send the request: " + e.message;
   } finally {
