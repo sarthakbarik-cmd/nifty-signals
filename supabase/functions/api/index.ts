@@ -5,19 +5,18 @@
 //   • dashboard: Authorization: Bearer <owner's Supabase JWT>        -> every action below
 //
 // Actions: premarket_check | daily_levels | request_token | test_telegram | login_url | backfill {from,to}
-//          | refresh_premarket | today_candles | status
+//          | refresh_premarket | today_candles | status   (Phase 4 scan/tracking live in the `paper` function)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { buildChartSvg } from "../_shared/chart.ts";
+import { fetchParticipantOi, fiiLines, type PartRow } from "../_shared/fii.ts";
 import * as jobs from "../_shared/jobs.ts";
 import type { ExpiryCache } from "../_shared/levels.ts";
 import { BADGE, dayLabel, dayShort, eveningReport, type LevelsWithOi, morningPlan } from "../_shared/messages.ts";
 import { sendTelegram, sendTelegramPhoto } from "../_shared/notify.ts";
 import { svgToPng } from "../_shared/render.ts";
 import { SupabaseStore } from "../_shared/store.ts";
-import { istParts, isTradingDay, todayIst } from "../_shared/time.ts";
+import { istParts, isTradingDay, prevTradingDay, todayIst } from "../_shared/time.ts";
 import { startTokenRequest, type TokenRequestState } from "../_shared/tokenflow.ts";
-import { runScan } from "../_shared/scan.ts";
-import { settingsFrom } from "../_shared/strategy.ts";
 import { buildAuthorizeUrl, NIFTY_INDEX_KEY, UpstoxAuthError, UpstoxClient, UpstoxError } from "../_shared/upstox.ts";
 
 const CORS = {
@@ -47,8 +46,12 @@ async function cprCfg(store: SupabaseStore) {
 const fmt0 = (x: number) => Math.round(x).toLocaleString("en-IN");
 
 /** 09:20 message: plain-language plan + chart (previous day's candles, today's levels, now line). */
-async function sendMorning(store: SupabaseStore, today: string, lv: LevelsWithOi, price: number, inst: ExpiryCache | null, prefix = "") {
-  const { text, bias } = morningPlan(today, lv, price, inst, await cprCfg(store));
+async function sendMorning(store: SupabaseStore, today: string, lv: LevelsWithOi, price: number, inst: ExpiryCache | null, prefix = "", suffix = "") {
+  const plan = morningPlan(today, lv, price, inst, await cprCfg(store));
+  const bias = plan.bias;
+  const joined = suffix ? `${plan.text}\n\n${suffix}` : plan.text;
+  const split = Boolean(suffix) && (prefix + joined).length > 1024; // keep the plan as the chart caption
+  const text = split ? plan.text : joined;
   const { svg } = buildChartSvg({
     title: `NIFTY plan · ${dayLabel(today)}`,
     subtitle: `Candles: ${dayLabel(lv.based_on)} (15-min)  ·  Levels for ${dayLabel(today)}  ·  Nifty ${fmt0(price)} at 09:20`,
@@ -58,7 +61,8 @@ async function sendMorning(store: SupabaseStore, today: string, lv: LevelsWithOi
   const png = await svgToPng(svg);
   const app = await store.app();
   await sendTelegramPhoto(env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID"), prefix + text, png, app.dashboard_url);
-  return { chart: Boolean(png), chars: (prefix + text).length };
+  if (split) await telegram(suffix);
+  return { chart: Boolean(png), chars: (prefix + text).length, fii_separate: split };
 }
 
 /** 15:45 message: data check + next trading day's levels + chart (today's candles, next day's levels). */
@@ -89,7 +93,8 @@ async function testTelegram(store: SupabaseStore): Promise<Record<string, unknow
   if (!lv) throw new HttpError(412, "No levels stored yet.");
   const inst = await store.getConfig<ExpiryCache>("instruments");
   const price = lv.oi_spot ?? lv.PDC;
-  const morning = await sendMorning(store, lv.date, lv, price, inst?.for_date === lv.date ? inst : null, "🧪 TEST (sample of the 09:20 message)\n\n");
+  const morning = await sendMorning(store, lv.date, lv, price, inst?.for_date === lv.date ? inst : null, "🧪 TEST (sample of the 09:20 message)\n\n",
+    await fiiContext(store, lv.based_on, holidays));
   const check = await store.getCheck(lv.based_on);
   const evening = check
     ? await sendEvening(store, check, lv.date, { ...lv, maxCallOI: null, maxPutOI: null }, holidays, "🧪 TEST (sample of the 15:45 message)\n\n")
@@ -119,41 +124,26 @@ async function scheduledTokenRequest(store: SupabaseStore): Promise<Record<strin
   }
 }
 
-/** Phase 3: after each 15-min candle close (09:31 … 15:16 IST). Paper signals only — no orders. */
-async function candleScan(store: SupabaseStore): Promise<Record<string, unknown>> {
-  const today = todayIst();
-  const holidays = await jobs.resolveHolidays(new UpstoxClient(null), store, today);
-  if (!isTradingDay(today, holidays)) return { skipped: "not a trading day" };
-  const token = await store.getValidToken();
-  if (!token) {
-    await store.log("candle_scan", "warn", "No Upstox token — scan skipped");
-    return { skipped: "no token" };
+/** FII block for the 09:20 message (context only). Uses stored rows, else NSE's file; never throws. */
+async function fiiContext(store: SupabaseStore, day: string, holidays: Set<string>): Promise<string> {
+  const load = async (d: string): Promise<PartRow | null> => {
+    const { data } = await store.db.from("participant_oi").select("*").eq("date", d).eq("client_type", "FII").maybeSingle();
+    if (data) return data as PartRow;
+    const rows = await fetchParticipantOi(d);
+    if (!rows) return null;
+    await store.db.from("participant_oi").upsert(Object.entries(rows).map(([client_type, r]) => ({ date: d, client_type, ...r })));
+    return rows.FII;
+  };
+  try {
+    const cur = await load(day);
+    if (!cur) return `🏦 FII data for ${dayLabel(day)} not available today.`;
+    const prevDay = prevTradingDay(day, holidays);
+    const prev = await load(prevDay).catch(() => null);
+    return fiiLines(day, cur, prev ? prevDay : null, prev);
+  } catch (e) {
+    await store.log("fii", "warn", `FII data not added: ${(e as Error).message}`);
+    return `🏦 FII data not available today.`;
   }
-  const lv = await store.getLevelsFull({ date: today });
-  if (!lv) {
-    await store.log("candle_scan", "warn", `No levels for ${today} — scan skipped`);
-    return { skipped: "no levels" };
-  }
-  const client = new UpstoxClient(token);
-  const now = Date.now();
-  const intraday = (await client.intradayCandles(NIFTY_INDEX_KEY, "minutes", 15))
-    .filter((c) => c.t.startsWith(today) && new Date(c.t).getTime() + 15 * 60_000 <= now); // closed candles only
-  const history = await store.recent15m(today, 12);
-  const app = await store.app();
-  const res = await runScan({
-    today, candles: [...history, ...intraday], levels: lv, settings: settingsFrom(await store.settings()),
-    signalsToday: await store.signalsFor(today),
-    chain: async () => {
-      const inst = await store.getConfig<ExpiryCache>("instruments");
-      if (!inst || inst.for_date !== today) return null;
-      return { rows: await client.optionChain(NIFTY_INDEX_KEY, inst.trade_expiry), expiry: inst.trade_expiry, lotSize: inst.lot_size };
-    },
-    insert: (r) => store.insertSignal(r),
-    update: (id, p) => store.updateSignal(id, p),
-    notify: async (t) => { await sendTelegram(env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID"), t, app.dashboard_url); },
-    log: (level, m, data) => store.log("candle_scan", level, m, data),
-  });
-  return res;
 }
 
 // --------------------------------------------------------------------------- scheduled jobs
@@ -177,7 +167,7 @@ async function premarketCheck(store: SupabaseStore): Promise<Record<string, unkn
     return { token: false, detail, resent };
   }
   const res = await jobs.runPremarket(client, store, today, holidays, await settingsBand(store));
-  await sendMorning(store, today, res, res.oi_spot, res.instruments);
+  await sendMorning(store, today, res, res.oi_spot, res.instruments, "", await fiiContext(store, res.based_on, holidays));
   return { token: true, maxCallOI: res.maxCallOI, maxPutOI: res.maxPutOI, trade_expiry: res.instruments.trade_expiry, lot_size: res.instruments.lot_size };
 }
 
@@ -268,7 +258,6 @@ Deno.serve(async (req) => {
       if (action === "daily_levels") return json(await runJob(store, action, dailyLevels));
       if (action === "test_telegram") return json(await testTelegram(store));
       if (action === "request_token") return json(await scheduledTokenRequest(store));
-      if (action === "candle_scan") return json(await runJob(store, action, candleScan));
       throw new HttpError(400, `Unknown scheduled action: ${action}`);
     }
 
@@ -327,9 +316,6 @@ Deno.serve(async (req) => {
         try { return json(await requestToken(store, "dashboard")); }
         catch (e) { throw new HttpError(502, (e as Error).message); }
       }
-
-      case "candle_scan":
-        return json(await runJob(store, action, candleScan));
 
       // Manual "run now" of the scheduled jobs, for testing from the dashboard.
       case "premarket_check":

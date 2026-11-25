@@ -126,3 +126,24 @@ Deno.test("telegram: falls back to text if no image, if photo fails, or if capti
   await sendTelegramPhoto("T", "1", "x".repeat(1100), new Uint8Array([1]), null, c.f);
   ok(c.calls.length === 2 && (c.calls[0].body as FormData).get("caption") === null && c.calls[1].url.endsWith("/sendMessage"));
 });
+
+import { fiiLines, fiiUrl, parseParticipantOi } from "../functions/_shared/fii.ts";
+import { morningPlan as _mp } from "../functions/_shared/messages.ts";
+
+const NSE_CSV = `""Participant wise Open Interest (no. of contracts) in Equity Derivatives as on Nov 25, 2026"",,,,,,,,,,,,,,
+Client Type,Future Index Long,Future Index Short,Future Stock Long,Future Stock Short     ,Option Index Call Long,Option Index Put Long,Option Index Call Short,Option Index Put Short,Option Stock Call Long,Option Stock Put Long,Option Stock Call Short,Option Stock Put Short,Total Long Contracts      ,Total Short Contracts
+Client,1,2,3,4,5,6,7,8,9,10,11,12,13,14
+FII,38700,123930,3648854,2299690,453411,713682,575534,442714,1,1,1,1,1,1
+TOTAL,1,1,1,1,1,1,1,1,1,1,1,1,1,1`;
+
+Deno.test("FII block: approved layout from NSE's participant-wise OI file", () => {
+  eq(fiiUrl("2026-11-25"), "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_25112026.csv");
+  const cur = parseParticipantOi(NSE_CSV).FII;
+  const prev = { fut_idx_long: 30649, fut_idx_short: 121598, opt_idx_call_long: 395710, opt_idx_put_long: 629193, opt_idx_call_short: 485893, opt_idx_put_short: 317883 };
+  eq(fiiLines("2026-11-25", cur, "2026-11-23", prev), [
+    "🏦 FII positions (Wed 25 Nov, NSE)",
+    "• Index futures: 24% long (Mon: 20%), net short 85,230 contracts, reduced by 5,719",
+    "• Index options: calls net sold 1.22 lakh · puts net bought 2.71 lakh → bearish tilt",
+    "ℹ️ For context only. Our 12-month test found FII data doesn't predict the next day.",
+  ].join("\n"));
+});
