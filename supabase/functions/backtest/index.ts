@@ -3,7 +3,7 @@
 // no effect on live signals. Auth: the scheduler secret (x-cron-secret), so only the owner's
 // database can start it. Body: {"from":"YYYY-MM-DD","to":"YYYY-MM-DD"} (≤ 31 days per call).
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { runBacktest } from "../_shared/backtest.ts";
+import { runBacktest, runPullbackBacktest } from "../_shared/backtest.ts";
 import { type Candle, groupByDate } from "../_shared/candles.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { settingsFrom } from "../_shared/strategy.ts";
@@ -40,7 +40,8 @@ Deno.serve(async (req) => {
     const c1 = (await chunked(from, to, (a, b) => client.historicalCandles(NIFTY_INDEX_KEY, "minutes", 1, a, b))).filter(trading);
     const dl = (await client.historicalCandles(NIFTY_INDEX_KEY, "days", 1, addDays(from, -10), to)).filter(trading);
     const dailies = Object.fromEntries(dl.map((d) => [d.t.slice(0, 10), d]));
-    const trades = runBacktest(c15, groupByDate(c1), dailies, from, to, settingsFrom(await store.settings()));
+    const st = settingsFrom(await store.settings()), byDay = groupByDate(c1);
+    const trades: object[] = [...runBacktest(c15, byDay, dailies, from, to, st), ...runPullbackBacktest(c15, byDay, dailies, from, to, st)];
 
     const del = await store.db.from("backtest_trades").delete().gte("date", from).lte("date", to);
     if (del.error) throw new Error(del.error.message);
@@ -49,7 +50,7 @@ Deno.serve(async (req) => {
       if (ins.error) throw new Error(ins.error.message);
     }
     const summary: Record<string, Record<string, number>> = {};
-    for (const t of trades) (summary[t.variant] ??= {})[t.status] = (summary[t.variant]?.[t.status] ?? 0) + 1;
+    for (const t of trades as { variant: string; status: string }[]) (summary[t.variant] ??= {})[t.status] = (summary[t.variant]?.[t.status] ?? 0) + 1;
     await store.log("backtest", "info", `Backtest ${from}..${to}: ${trades.length} rows`, summary);
     return json({ from, to, days: new Set(c1.map((c) => c.t.slice(0, 10))).size, rows: trades.length, summary });
   } catch (e) {

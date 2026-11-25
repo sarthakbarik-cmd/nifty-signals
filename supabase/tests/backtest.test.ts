@@ -47,3 +47,26 @@ Deno.test("end-to-end on the CE fixture: all 4 variants evaluated on the same se
   ok(trades.every((t) => t.b_time === "10:30" && t.trigger === 24224), JSON.stringify(trades));
   ok(trades.some((t) => t.status === "TARGET"), JSON.stringify(trades.map((t) => [t.variant, t.status, t.reason])));
 });
+
+import { evaluatePullback, simulateHalf } from "../functions/_shared/backtest.ts";
+import { ema } from "../functions/_shared/strategy.ts";
+
+Deno.test("pullback: 2 green, 1 red, green resume → setup; half at 1.5R then trail", () => {
+  const k = (i: number, o: number, h: number, l: number, c: number): Candle => {
+    const m = 9 * 60 + 15 + i * 15;
+    return { t: `2026-11-25T${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}:00+05:30`, o, h, l, c };
+  };
+  // long gentle uptrend for EMA warm-up (previous days are not needed for this pure test)
+  const cs: Candle[] = [];
+  for (let i = 0; i < 60; i++) cs.push({ t: `2026-11-24T09:15:00+05:30`, o: 24000 + i, h: 24003 + i, l: 23998 + i, c: 24001 + i });
+  cs.push(k(0, 24062, 24080, 24060, 24078), k(1, 24078, 24095, 24075, 24093), k(2, 24093, 24094, 24070, 24074), k(3, 24074, 24100, 24072, 24098));
+  const lv = ceLevels({ TC: 23900, BC: 23890, PDC: 23880 });
+  const st = evaluatePullback(cs, ema(cs.map((c) => c.c), 20), ema(cs.map((c) => c.c), 50), lv, DEFAULTS);
+  ok(st, "expected a setup");
+  eq([st!.side, st!.trigger, st!.sl, st!.R, st!.reds, st!.bClose, st!.validUntil], ["CE", 24105, 24065, 40, 1, "10:15", "10:30"]);
+  const om = [m("10:15", 24098, 24106, 24097, 24105), m("10:20", 24105, 24166, 24104, 24165), m("10:31", 24165, 24200, 24160, 24190), m("10:50", 24190, 24191, 24150, 24151)];
+  const day15 = [k(4, 24098, 24170, 24097, 24165), k(5, 24165, 24200, 24160, 24190)];
+  const ex = simulateHalf(st!, 1.5, om, day15, 5)!;
+  // T1 = 24165 at 10:20; 10:30 candle closes 10:45 with low 24160 → stop 24155; 10:50 low 24150 → runner out at 24155
+  eq([ex.t1Time, ex.exit, ex.runner, ex.status, ex.pts], ["10:20", "10:50", 24155, "TARGET", 55]);
+});
