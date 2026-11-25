@@ -99,3 +99,15 @@ cd supabase && deno test --allow-read tests/
 ## Limits to know
 - **Edge Function CPU.** Each run gets 2 s of CPU (Supabase free plan), so one backfill call covers at most 15 days.
 - **HTML pages.** Edge Functions can't serve web pages on the default domain. That's why the dashboard is on GitHub Pages and the Upstox callback redirects back to it.
+
+## Phase 4 — paper trading (main plan = variant B)
+
+- **Live rules:** Phase 3 setup, but SL = trigger ∓ ATR(14) of 15-min candles and target = 2R (variant B, chosen after the 12-month backtest).
+- **Paper mode:** every signal is tracked at ≥ 1 lot even if real money would skip it (the alert says why under "Real money").
+- **`paper` Edge Function** (pg_cron, scheduler secret): `candle_scan` after each 15-min close; `track` every minute
+  (trigger → SL / target / 15:15 exit on 1-min candles, paper fills from the option's real 1-min prices); `paper_eod` at 15:55 IST
+  (background variants A–G replayed on the day → `shadow_trades`, plus the evening Telegram summary).
+- **Daily loss limit:** no new signals once today's paper loss ≥ `daily_loss_limit_rs` (₹2,000). Costs ₹60 per trade.
+- Settings live in `app_config.settings` (`sl_mode`, `paper_mode`, `daily_loss_limit_rs`, `cost_per_trade`, `paper_start`).
+- Dashboard **Results** tab: KPIs, closed paper trades, background variants vs the 12-month backtest.
+- Research tables: `backtest_trades` (12-month backtest), `participant_oi` + `nifty_eod` (FII test — no next-day edge found).

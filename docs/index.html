@@ -14,7 +14,7 @@
 <body>
   <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
   <header>
-    <h1>Nifty Signals <span class="tag">Phase 3 · Signals</span></h1>
+    <h1>Nifty Signals <span class="tag">Phase 4 · Paper trading</span></h1>
     <div id="user-box"></div>
   </header>
 
@@ -34,6 +34,7 @@
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="today" aria-selected="true">Today</button>
         <button role="tab" data-tab="signals" aria-selected="false">Signals</button>
+        <button role="tab" data-tab="results" aria-selected="false">Results</button>
         <button role="tab" data-tab="data" aria-selected="false">Data</button>
       </nav>
 
@@ -83,6 +84,26 @@
           <p class="hint">Paper signals only — the app never places orders. PENDING = waiting for the trigger during the
             next 15-min candle; SKIPPED = a setup formed but a rule blocked it (reason shown).</p>
           <div id="signals"></div>
+        </section>
+      </div>
+
+      <!-- ================= RESULTS ================= -->
+      <div id="tab-results" class="hidden">
+        <section class="card">
+          <div class="card-head">
+            <h2>Paper results · main plan B</h2>
+            <button id="btn-res-refresh">Refresh</button>
+          </div>
+          <p class="hint">Paper trades only — no orders are ever placed. Entry and exit use the option's real 1-minute
+            prices from Upstox (so time decay is included), 1 lot each, minus <span id="res-cost">₹60</span> costs per trade.</p>
+          <div id="res-kpis" class="kpis"></div>
+          <div id="res-trades"></div>
+        </section>
+        <section class="card">
+          <h2>Background variants</h2>
+          <p class="hint">The same days replayed after the close through the other plans, in R (1R = the trade's risk).
+            “12-month backtest” is the same plan over Nov 2025 – Nov 2026, for comparison.</p>
+          <div id="res-variants"></div>
         </section>
       </div>
 

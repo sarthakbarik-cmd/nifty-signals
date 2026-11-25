@@ -55,8 +55,10 @@ function showTab(name) {
   $("tab-today").classList.toggle("hidden", name !== "today");
   $("tab-data").classList.toggle("hidden", name !== "data");
   $("tab-signals").classList.toggle("hidden", name !== "signals");
+  $("tab-results").classList.toggle("hidden", name !== "results");
   if (name === "data") { loadDay($("day").value); loadLogs(); }
   if (name === "signals") loadSignals();
+  if (name === "results") loadResults();
 }
 
 // ---------- auth (email + password; owner account only)
@@ -521,13 +523,85 @@ async function loadSignals() {
         <td>${s.strike ? `${num(s.strike, 0)} ${esc(s.side)}<br><span class="hint">${esc(s.expiry ?? "")}</span>` : esc(s.side)}</td>
         <td>${num(s.trigger)}</td><td>${num(s.sl)}</td><td>${num(s.target)}</td><td>${num(s.r)}</td>
         <td>${s.lots != null ? `${s.lots} · ₹${num(s.risk_rs, 0)}` : "–"}</td></tr>
-        ${s.reason ? `<tr class="reason"><td colspan="8">${esc(s.reason)}</td></tr>` : ""}`).join("")}
+        ${s.reason || s.exit_reason ? `<tr class="reason"><td colspan="8">${esc(s.exit_reason ?? s.reason)}${s.pnl_rs != null
+          ? ` · premium ₹${num(s.entry_premium)} → ₹${num(s.exit_premium)} · <b class="${s.pnl_rs >= 0 ? "up" : "down"}">${rupee(s.pnl_rs)}</b>` : ""}</td></tr>` : ""}`).join("")}
     </table></div>`;
   } catch (e) {
     box.innerHTML = `<p class="error">${esc(e.message)}</p>`;
   }
 }
 $("btn-sig-refresh").onclick = loadSignals;
+
+// ---------- results (Phase 4)
+const rupee = (x) => `${x < 0 ? "−" : "+"}₹${Math.round(Math.abs(x)).toLocaleString("en-IN")}`;
+const CLOSED = ["TARGET", "SL", "TIME_EXIT"];
+const VARIANT_NAMES = {
+  A: "A · spec SL, 2R", B: "B · ATR SL, 2R (main)", C: "C · signal-candle SL, 2R", D: "D · ATR SL, level target",
+  E: "E · half at 1.5R + trail", F: "F · half at 2R + trail", G: "G · E on trend days",
+};
+
+async function loadResults() {
+  const kp = $("res-kpis"), tb = $("res-trades"), vb = $("res-variants");
+  try {
+    const cfg = await rows(sb.from("app_config").select("value").eq("key", "settings"));
+    const st = cfg[0]?.value ?? {};
+    const start = st.paper_start ?? "2000-01-01";
+    $("res-cost").textContent = `₹${st.cost_per_trade ?? 60}`;
+    const trades = await rows(sb.from("signals").select("*").in("status", CLOSED).gte("date", start)
+      .order("date", { ascending: true }).order("id", { ascending: true }));
+    let run = 0, peak = 0, dd = 0;
+    const byDay = {};
+    for (const t of trades) {
+      run += t.pnl_rs ?? 0; peak = Math.max(peak, run); dd = Math.min(dd, run - peak);
+      t._run = run; byDay[t.date] = (byDay[t.date] ?? 0) + (t.pnl_rs ?? 0);
+    }
+    const wins = trades.filter((t) => (t.pnl_rs ?? 0) > 0).length;
+    const days = Object.values(byDay);
+    const kpi = (label, value, cls = "") => `<div class="kpi"><span>${label}</span><b class="${cls}">${value}</b></div>`;
+    kp.innerHTML = [
+      kpi("Paper since", esc(fmtDay(start))),
+      kpi("Trades", trades.length),
+      kpi("Winners", trades.length ? `${wins} (${Math.round((wins / trades.length) * 100)}%)` : "–"),
+      kpi("Total P&L", trades.length ? rupee(run) : "–", run >= 0 ? "up" : "down"),
+      kpi("Avg per trade", trades.length ? rupee(run / trades.length) : "–"),
+      kpi("Worst day", days.length ? rupee(Math.min(...days)) : "–"),
+      kpi("Biggest fall from peak", trades.length ? rupee(dd) : "–"),
+      kpi("Daily loss limit", st.daily_loss_limit_rs ? `₹${num(st.daily_loss_limit_rs, 0)}` : "off"),
+    ].join("");
+    tb.innerHTML = trades.length ? `<div class="table-wrap"><table class="signals">
+      <tr><th>Date · candle</th><th>Trade</th><th>Result</th><th>Premium</th><th>P&L</th><th>Running</th></tr>
+      ${trades.slice().reverse().map((t) => `<tr>
+        <td>${esc(fmtDay(t.date))}<br><span class="hint">${esc(t.b_time)} candle</span></td>
+        <td>${num(t.strike, 0)} ${esc(t.side)}<br><span class="hint">${t.lots} lot · ${esc(t.expiry ?? "")}</span></td>
+        <td><span class="pill ${t.status === "TARGET" ? "ok" : t.status === "SL" ? "err" : ""}">${esc(t.status)}</span>
+          <br><span class="hint">${esc(t.exit_reason ?? "")}</span></td>
+        <td>₹${num(t.entry_premium)} → ₹${num(t.exit_premium)}</td>
+        <td class="${(t.pnl_rs ?? 0) >= 0 ? "up" : "down"}"><b>${rupee(t.pnl_rs ?? 0)}</b></td>
+        <td>${rupee(t._run)}</td></tr>`).join("")}
+    </table></div>` : `<p class="hint">No closed paper trades yet. Trades appear here after they hit the SL, the target, or the 15:15 exit.</p>`;
+
+    const shadow = await rows(sb.from("shadow_trades").select("variant,status,r_mult").in("status", CLOSED).gte("date", start));
+    const bt = await rows(sb.from("backtest_trades").select("variant,r_mult").in("status", CLOSED).limit(5000));
+    const agg = (list) => {
+      const o = {};
+      for (const t of list) { const a = (o[t.variant] ??= { n: 0, w: 0, r: 0 }); a.n++; a.r += t.r_mult ?? 0; if ((t.r_mult ?? 0) > 0) a.w++; }
+      return o;
+    };
+    const sv = agg(shadow), bv = agg(bt);
+    vb.innerHTML = `<div class="table-wrap"><table class="signals">
+      <tr><th>Plan</th><th>Paper period: trades</th><th>Winners</th><th>Total R</th><th>Avg R</th><th>12-month backtest: avg R</th></tr>
+      ${Object.keys(VARIANT_NAMES).map((v) => {
+        const a = sv[v], b = bv[v];
+        return `<tr><td>${esc(VARIANT_NAMES[v])}</td><td>${a?.n ?? 0}</td><td>${a ? a.w : "–"}</td>
+          <td class="${(a?.r ?? 0) >= 0 ? "up" : "down"}">${a ? num(a.r) : "–"}</td><td>${a ? num(a.r / a.n) : "–"}</td>
+          <td>${b ? `${num(b.r / b.n)} <span class="hint">(${b.n} trades)</span>` : "–"}</td></tr>`;
+      }).join("")}
+    </table></div>`;
+  } catch (e) {
+    kp.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+  }
+}
+$("btn-res-refresh").onclick = loadResults;
 
 if (new URLSearchParams(location.search).get("upstox") === "ok") {
   history.replaceState(null, "", location.pathname);

@@ -7,7 +7,7 @@
 import type { Candle } from "./candles.ts";
 import type { LevelsDoc } from "./jobs.ts";
 import { computeLevels } from "./levels.ts";
-import { ema, evaluateSetup, oppositeLevels, type Side, type StrategySettings } from "./strategy.ts";
+import { atrSeries, ema, evaluateSetup, oppositeLevels, type Side, type StrategySettings } from "./strategy.ts";
 import { candleDate, candleSlot } from "./time.ts";
 
 export type Variant = "A" | "B" | "C" | "D";
@@ -25,17 +25,7 @@ const r2 = (x: number) => Math.round(x * 100) / 100;
 const toMin = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
 
 /** Wilder ATR over 15-min candles (null until `n` candles). */
-export function atr(c: Candle[], n = 14): (number | null)[] {
-  const out: (number | null)[] = new Array(c.length).fill(null);
-  let a = 0;
-  for (let i = 0; i < c.length; i++) {
-    const tr = i === 0 ? c[i].h - c[i].l
-      : Math.max(c[i].h - c[i].l, Math.abs(c[i].h - c[i - 1].c), Math.abs(c[i].l - c[i - 1].c));
-    if (i < n) { a += tr; if (i === n - 1) { a /= n; out[i] = a; } }
-    else { a = (a * (n - 1) + tr) / n; out[i] = a; }
-  }
-  return out;
-}
+export const atr = atrSeries;
 
 interface Plan { sl: number; target: number; R: number }
 

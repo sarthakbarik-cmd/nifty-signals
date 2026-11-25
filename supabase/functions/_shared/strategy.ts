@@ -10,12 +10,18 @@ export interface StrategySettings {
   capital: number; risk_pct: number; max_trades: number; max_sl_pts: number; target_r: number;
   gap_pct: number; gap_wait_until: string; no_trade_band: number; entry_start: string; entry_end: string;
   ema_fast: number; ema_slow: number; ema_touch_pct: number; trigger_buffer: number; sl_buffer: number;
+  // Phase 4
+  sl_mode: string;            // "spec" (pullback extreme) | "atr" (variant B: trigger ∓ ATR(14))
+  paper_mode: boolean;        // paper: never skip for SL size / lot budget, just note it
+  daily_loss_limit_rs: number; // stop new signals once today's paper loss reaches this (0 = off)
+  cost_per_trade: number;     // ₹ brokerage + charges per round trip (paper P&L)
 }
 
 export const DEFAULTS: StrategySettings = {
   capital: 50000, risk_pct: 2, max_trades: 2, max_sl_pts: 40, target_r: 2, gap_pct: 0.8, gap_wait_until: "10:00",
   no_trade_band: 20, entry_start: "09:30", entry_end: "14:30", ema_fast: 20, ema_slow: 50, ema_touch_pct: 0.0005,
   trigger_buffer: 5, sl_buffer: 5,
+  sl_mode: "spec", paper_mode: false, daily_loss_limit_rs: 0, cost_per_trade: 60,
 };
 
 export function settingsFrom(raw: Record<string, unknown>): StrategySettings {
@@ -23,7 +29,8 @@ export function settingsFrom(raw: Record<string, unknown>): StrategySettings {
   for (const k of Object.keys(DEFAULTS)) {
     const v = raw[k];
     if (v === undefined || v === null || v === "") continue;
-    out[k] = typeof (DEFAULTS as any)[k] === "number" ? Number(v) : String(v);
+    const t = typeof (DEFAULTS as any)[k];
+    out[k] = t === "number" ? Number(v) : t === "boolean" ? (v === true || v === "true") : String(v);
   }
   return out as unknown as StrategySettings;
 }
@@ -115,7 +122,7 @@ export function evaluateSetup(
 
 /** Gates applied to a formed setup (§6.1 time/gap/trade limits, §6.4 R and room). null = passes. */
 export function gateSetup(
-  st: Setup, ctx: { todayOpen: number; tradesToday: number; busy: boolean },
+  st: Setup, ctx: { todayOpen: number; tradesToday: number; busy: boolean; lossToday?: number },
   lv: LevelsDoc & { maxCallOI?: number | null; maxPutOI?: number | null }, s: StrategySettings,
 ): string | null {
   const close = toMin(st.bClose);
@@ -124,7 +131,8 @@ export function gateSetup(
   if (gap > s.gap_pct && close < toMin(s.gap_wait_until)) return `gap day (${gap.toFixed(2)}% > ${s.gap_pct}%): no signals before ${s.gap_wait_until}`;
   if (ctx.tradesToday >= s.max_trades) return `max ${s.max_trades} trades for today already taken`;
   if (ctx.busy) return "another signal is already pending/open";
-  if (st.R > s.max_sl_pts) return `SL too wide (R ${st.R} > ${s.max_sl_pts} pts)`;
+  if (s.daily_loss_limit_rs > 0 && (ctx.lossToday ?? 0) >= s.daily_loss_limit_rs) return `daily loss limit reached (paper loss ₹${Math.round(ctx.lossToday!)} ≥ ₹${s.daily_loss_limit_rs})`;
+  if (!s.paper_mode && st.R > s.max_sl_pts) return `SL too wide (R ${st.R} > ${s.max_sl_pts} pts)`;
   const need = s.target_r * st.R;
   const opp = oppositeLevels(st.side, lv).filter((x) => st.side === "CE" ? x.v > st.trigger : x.v < st.trigger)
     .map((x) => ({ ...x, d: Math.abs(x.v - st.trigger) })).sort((a, b) => a.d - b.d);
@@ -169,6 +177,25 @@ export function sizePosition(R: number, delta: number, lotSize: number, s: Strat
   const perLot = R * delta * lotSize;
   const lots = perLot > 0 ? Math.floor(budget / perLot) : 0;
   return { lots, perLot: Math.round(perLot), budget: Math.round(budget), risk: Math.round(lots * perLot) };
+}
+
+/** Wilder ATR(n) over candles (null until n candles). */
+export function atrSeries(c: Candle[], n = 14): (number | null)[] {
+  const out: (number | null)[] = new Array(c.length).fill(null);
+  let a = 0;
+  for (let i = 0; i < c.length; i++) {
+    const tr = i === 0 ? c[i].h - c[i].l : Math.max(c[i].h - c[i].l, Math.abs(c[i].h - c[i - 1].c), Math.abs(c[i].l - c[i - 1].c));
+    if (i < n) { a += tr; if (i === n - 1) { a /= n; out[i] = a; } } else { a = (a * (n - 1) + tr) / n; out[i] = a; }
+  }
+  return out;
+}
+
+/** Variant B (approved main plan): SL = trigger ∓ ATR(14) of the 15-min candles at B, target = target_r × R. */
+export function applyAtrStop(st: Setup, atrB: number, s: StrategySettings): Setup {
+  const up = st.side === "CE", R = r2(atrB);
+  const sl = r2(up ? st.trigger - R : st.trigger + R);
+  return { ...st, sl, R, target: r2(up ? st.trigger + s.target_r * R : st.trigger - s.target_r * R),
+    details: { ...st.details, sl_mode: "atr", atr14: R, spec_sl: st.sl, spec_r: st.R } };
 }
 
 /** Phase 3 lifecycle: did the candle after B hit the trigger? */

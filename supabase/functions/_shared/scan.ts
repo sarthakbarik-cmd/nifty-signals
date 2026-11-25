@@ -3,12 +3,13 @@
 import type { Candle } from "./candles.ts";
 import type { LevelsDoc } from "./jobs.ts";
 import {
-  type ChainOpt, ema, evaluateSetup, gateSetup, pickOption, type Setup, type Side, sizePosition,
+  applyAtrStop, atrSeries, type ChainOpt, ema, evaluateSetup, gateSetup, pickOption, type Setup, type Side, sizePosition,
   type StrategySettings, triggerHit,
 } from "./strategy.ts";
 import { candleDate, candleSlot } from "./time.ts";
 
-export type Status = "PENDING" | "TRIGGERED" | "CANCELLED" | "SKIPPED";
+export type Status = "PENDING" | "TRIGGERED" | "CANCELLED" | "SKIPPED" | "TARGET" | "SL" | "TIME_EXIT";
+export const TAKEN: Status[] = ["TRIGGERED", "TARGET", "SL", "TIME_EXIT"];
 
 export interface SignalRow {
   id?: number; date: string; b_time: string; side: Side; status: Status; reason: string | null;
@@ -17,6 +18,8 @@ export interface SignalRow {
   ltp?: number | null; prem_sl?: number | null; prem_target?: number | null;
   lot_size?: number | null; lots?: number | null; risk_rs?: number | null;
   triggered_at?: string | null; details?: Record<string, unknown>;
+  entry_premium?: number | null; exit_premium?: number | null; exit_reason?: string | null; closed_at?: string | null;
+  pnl_rs?: number | null;
 }
 
 export interface ScanDeps {
@@ -42,15 +45,18 @@ const addMin = (hhmm: string, m: number) => {
 };
 
 export function pendingMessage(s: SignalRow): string {
+  const notes = (s.details?.real_money_notes as string[] | undefined) ?? [];
+  const atr = s.details?.sl_mode === "atr";
   return [
-    `NIFTY ${s.side} SIGNAL  (PENDING)`,
+    `NIFTY ${s.side} SIGNAL  (PENDING)${s.details?.paper ? " · 📝 paper" : ""}`,
     `Buy ${fmt0(s.strike!)} ${s.side}  ${expLabel(s.expiry)} expiry`,
     `If Nifty ${s.side === "CE" ? "crosses" : "falls below"} ${fmt(s.trigger)} by ${s.valid_until}`,
     `SL: Nifty ${fmt(s.sl)}  | premium ~${fmt0(s.prem_sl!)}`,
     `Target: Nifty ${fmt(s.target)} | premium ~${fmt0(s.prem_target!)}`,
     `Lots: ${s.lots} (lot size ${s.lot_size}) | Risk ≈ ₹${fmt0(s.risk_rs!)}`,
     "",
-    `Why: ${s.side === "CE" ? "uptrend" : "downtrend"}, pullback to EMA20, ${(s.details?.confirmation as string) ?? "confirmation"} on the ${s.b_time} candle. Premium now ~${fmt0(s.ltp!)} (delta ${s.delta}).`,
+    `Why: ${s.side === "CE" ? "uptrend" : "downtrend"}, pullback to EMA20, ${(s.details?.confirmation as string) ?? "confirmation"} on the ${s.b_time} candle. Premium now ~${fmt0(s.ltp!)} (delta ${s.delta}).${atr ? ` SL = 1 ATR (${fmt(s.r)} pts).` : ""}`,
+    ...(notes.length ? ["", `Real money: ${notes.join("; ")}`] : []),
   ].join("\n");
 }
 
@@ -97,11 +103,17 @@ export async function runScan(d: ScanDeps): Promise<Record<string, unknown>> {
     await d.log("info", `${bTime} candle: no signal — ${ev.reason}`, ev.details);
     return { ...out, result: "none", reason: ev.reason };
   }
-  const st: Setup = ev.setup;
+  let st: Setup = ev.setup;
+  if (d.settings.sl_mode === "atr") {
+    const atrB = atrSeries(d.candles)[d.candles.length - 1];
+    if (atrB == null) return { ...out, result: "none", reason: "ATR still warming up" };
+    st = applyAtrStop(st, atrB, d.settings);
+  }
 
   // 3. gates
-  const tradesToday = d.signalsToday.filter((x) => x.status === "TRIGGERED").length;
+  const tradesToday = d.signalsToday.filter((x) => TAKEN.includes(x.status)).length;
   const busy = d.signalsToday.some((x) => x.status === "PENDING" || x.status === "TRIGGERED");
+  const pnlToday = d.signalsToday.reduce((a, x) => a + (x.pnl_rs ?? 0), 0);
   const base: SignalRow = {
     date: today, b_time: bTime, side: st.side, status: "SKIPPED", reason: null, trigger: st.trigger, sl: st.sl,
     target: st.target, r: st.R, valid_until: st.validUntil, details: st.details,
@@ -113,7 +125,7 @@ export async function runScan(d: ScanDeps): Promise<Record<string, unknown>> {
     await d.log("info", `${bTime} candle: ${st.side} setup SKIPPED — ${reason}`, st.details);
     return { ...out, result: "skipped", reason };
   };
-  const gate = gateSetup(st, { todayOpen: todays[0].o, tradesToday, busy }, d.levels, d.settings);
+  const gate = gateSetup(st, { todayOpen: todays[0].o, tradesToday, busy, lossToday: Math.max(0, -pnlToday) }, d.levels, d.settings);
   if (gate) return await skip(gate);
 
   // 4. option + size (§7)
@@ -122,13 +134,17 @@ export async function runScan(d: ScanDeps): Promise<Record<string, unknown>> {
   const pick = pickOption(ch.rows, st.side, b.c);
   if (!pick || !pick.ltp || !pick.delta) return await skip("no usable option price/delta in the chain");
   const size = sizePosition(st.R, pick.delta, ch.lotSize, d.settings);
+  const notes: string[] = [];
+  if (st.R > d.settings.max_sl_pts) notes.push(`SL ${st.R} pts is wider than the ${d.settings.max_sl_pts}-pt limit`);
+  if (size.lots < 1) notes.push(`1 lot risks ₹${fmt0(size.perLot)} (> ₹${fmt0(size.budget)} budget)`);
+  if (d.settings.paper_mode && size.lots < 1) Object.assign(size, { lots: 1, risk: size.perLot });
   const opt = {
     strike: pick.strike, expiry: ch.expiry, option_key: pick.key, delta: pick.delta, ltp: pick.ltp,
     prem_sl: Math.max(0, Math.round((pick.ltp - st.R * pick.delta) * 100) / 100),
     prem_target: Math.round((pick.ltp + d.settings.target_r * st.R * pick.delta) * 100) / 100,
     lot_size: ch.lotSize, lots: size.lots, risk_rs: size.risk,
   };
-  Object.assign(base, opt, { details: { ...st.details, atm: pick.atm, itm_shift: pick.itmShift } });
+  Object.assign(base, opt, { details: { ...st.details, atm: pick.atm, itm_shift: pick.itmShift, paper: d.settings.paper_mode, real_money_notes: notes } });
   if (size.lots < 1) return await skip(`risk too high for 1 lot (1 lot risks ₹${size.perLot} > ₹${size.budget})`);
 
   const row: SignalRow = { ...base, status: "PENDING", reason: "setup confirmed" };
