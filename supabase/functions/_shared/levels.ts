@@ -29,11 +29,16 @@ export function computeLevels(daily: { h: number; l: number; c: number }, band: 
   };
 }
 
+export interface ChainLeg {
+  instrument_key?: string;
+  market_data?: { oi?: number; ltp?: number };
+  option_greeks?: { delta?: number };
+}
 export interface ChainRow {
   strike_price: number;
   underlying_spot_price?: number;
-  call_options?: { market_data?: { oi?: number } };
-  put_options?: { market_data?: { oi?: number } };
+  call_options?: ChainLeg;
+  put_options?: ChainLeg;
 }
 
 export interface OiLevels {

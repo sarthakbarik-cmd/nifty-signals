@@ -14,7 +14,7 @@
 <body>
   <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
   <header>
-    <h1>Nifty Signals <span class="tag">Phase 2 · Levels</span></h1>
+    <h1>Nifty Signals <span class="tag">Phase 3 · Signals</span></h1>
     <div id="user-box"></div>
   </header>
 
@@ -33,6 +33,7 @@
     <div id="app" class="hidden">
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="today" aria-selected="true">Today</button>
+        <button role="tab" data-tab="signals" aria-selected="false">Signals</button>
         <button role="tab" data-tab="data" aria-selected="false">Data</button>
       </nav>
 
@@ -69,6 +70,19 @@
           </div>
           <div id="lv-chart" class="chart-box"></div>
           <div id="lv-legend" class="legend"></div>
+        </section>
+      </div>
+
+      <!-- ================= SIGNALS ================= -->
+      <div id="tab-signals" class="hidden">
+        <section class="card">
+          <div class="card-head">
+            <h2>Signals</h2>
+            <button id="btn-sig-refresh">Refresh</button>
+          </div>
+          <p class="hint">Paper signals only — the app never places orders. PENDING = waiting for the trigger during the
+            next 15-min candle; SKIPPED = a setup formed but a rule blocked it (reason shown).</p>
+          <div id="signals"></div>
         </section>
       </div>
 

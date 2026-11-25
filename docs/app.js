@@ -54,7 +54,9 @@ function showTab(name) {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   $("tab-today").classList.toggle("hidden", name !== "today");
   $("tab-data").classList.toggle("hidden", name !== "data");
+  $("tab-signals").classList.toggle("hidden", name !== "signals");
   if (name === "data") { loadDay($("day").value); loadLogs(); }
+  if (name === "signals") loadSignals();
 }
 
 // ---------- auth (email + password; owner account only)
@@ -501,6 +503,31 @@ async function loadLogs() {
     return `<li><div class="meta">${fmtTime(l.ts)} · ${esc(l.job)} · <span class="${cls}">${esc(l.level)}</span></div>${esc(l.message)}</li>`;
   }).join("") || `<li class="hint">No logs yet.</li>`;
 }
+
+// =====================================================================
+// SIGNALS (Phase 3)
+// =====================================================================
+async function loadSignals() {
+  const box = $("signals");
+  try {
+    const list = await rows(sb.from("signals").select("*").order("date", { ascending: false }).order("id", { ascending: false }).limit(60));
+    if (!list.length) { box.innerHTML = `<p class="hint">No signals yet. The scan runs after every 15-min candle (09:31–15:16).</p>`; return; }
+    const tone = { PENDING: "warn", TRIGGERED: "ok", CANCELLED: "", SKIPPED: "", TARGET: "ok", SL: "err", TIME_EXIT: "" };
+    box.innerHTML = `<div class="table-wrap"><table class="signals">
+      <tr><th>Date · candle</th><th>Status</th><th>Trade</th><th>Trigger</th><th>SL</th><th>Target</th><th>R</th><th>Lots · risk</th></tr>
+      ${list.map((s) => `<tr>
+        <td>${esc(fmtDay(s.date))}<br><span class="hint">${esc(s.b_time)} candle</span></td>
+        <td><span class="pill ${tone[s.status] ?? ""}">${esc(s.status)}</span></td>
+        <td>${s.strike ? `${num(s.strike, 0)} ${esc(s.side)}<br><span class="hint">${esc(s.expiry ?? "")}</span>` : esc(s.side)}</td>
+        <td>${num(s.trigger)}</td><td>${num(s.sl)}</td><td>${num(s.target)}</td><td>${num(s.r)}</td>
+        <td>${s.lots != null ? `${s.lots} · ₹${num(s.risk_rs, 0)}` : "–"}</td></tr>
+        ${s.reason ? `<tr class="reason"><td colspan="8">${esc(s.reason)}</td></tr>` : ""}`).join("")}
+    </table></div>`;
+  } catch (e) {
+    box.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+  }
+}
+$("btn-sig-refresh").onclick = loadSignals;
 
 if (new URLSearchParams(location.search).get("upstox") === "ok") {
   history.replaceState(null, "", location.pathname);

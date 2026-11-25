@@ -1,4 +1,4 @@
-# Nifty Option-Buying Signal App — Phases 1–2 on Supabase
+# Nifty Option-Buying Signal App — Phases 1–3 on Supabase
 
 **Signals only.** Nothing here places, modifies or cancels orders. Upstox is used read-only
 (login, profile, candles, holidays, option contracts, option chain). A unit test fails if any
@@ -11,6 +11,12 @@ order/GTT endpoint appears in the code.
 | Upstox login redirect | Edge Function `upstox-callback` |
 | Dashboard | Static site in `docs/`, served by GitHub Pages |
 | Secrets (Upstox key/secret, Telegram) | Supabase Edge Function secrets (never in code or the database) |
+
+## Phase 3 — signals
+- Rules exactly as approved in `PHASE3_RULES.md`; engine in `supabase/functions/_shared/strategy.ts`, scan in `scan.ts`.
+- `candle_scan` runs after every 15-min close (09:31 … 15:16 IST). Each decision is logged with its reason;
+  setups are stored in `signals` (PENDING → TRIGGERED / CANCELLED, or SKIPPED with reason) and sent to Telegram.
+- Daily: 08:45 approval request → tap Approve; 09:20 plan; 15-min scans; 15:45 data check + next day's levels.
 
 ## Layout
 ```

@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.4
 import type { Candle, DayReport } from "./candles.ts";
 import type { Level, LevelsDoc, Store } from "./jobs.ts";
 import type { ExpiryCache, OiLevels } from "./levels.ts";
+import type { SignalRow } from "./scan.ts";
 import { NIFTY_INDEX_KEY } from "./upstox.ts";
 
 export function adminClient(): SupabaseClient {
@@ -108,6 +109,24 @@ export class SupabaseStore implements Store {
       maxCallOI: d.max_call_oi as number | null, maxPutOI: d.max_put_oi as number | null, oi_spot: d.oi_spot as number | null,
     };
   }
+  /** 15-min candles of the last `days` stored sessions before `today`, oldest first (EMA warm-up). */
+  async recent15m(today: string, days = 12): Promise<Candle[]> {
+    const rows = check(await this.db.from("candles_15m").select("date,candles").lt("date", today)
+      .order("date", { ascending: false }).limit(days), "recent 15m") as { date: string; candles: Candle[] }[];
+    return rows.reverse().flatMap((r) => r.candles);
+  }
+
+  // ---- signals (Phase 3)
+  async signalsFor(date: string): Promise<SignalRow[]> {
+    return check(await this.db.from("signals").select("*").eq("date", date).order("id"), "signals") as SignalRow[];
+  }
+  async insertSignal(row: SignalRow) {
+    check(await this.db.from("signals").insert(row), "insert signal");
+  }
+  async updateSignal(id: number, patch: Partial<SignalRow>) {
+    check(await this.db.from("signals").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id), "update signal");
+  }
+
   async saveCheck(date: string, r: DayReport & { levels_for?: string }) {
     check(await this.db.from("data_checks").upsert({
       date, status: r.status, counts: r.counts, daily: r.daily, issues: r.issues, levels_for: r.levels_for ?? null,

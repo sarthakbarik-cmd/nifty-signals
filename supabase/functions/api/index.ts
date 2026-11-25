@@ -16,6 +16,8 @@ import { svgToPng } from "../_shared/render.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { istParts, isTradingDay, todayIst } from "../_shared/time.ts";
 import { startTokenRequest, type TokenRequestState } from "../_shared/tokenflow.ts";
+import { runScan } from "../_shared/scan.ts";
+import { settingsFrom } from "../_shared/strategy.ts";
 import { buildAuthorizeUrl, NIFTY_INDEX_KEY, UpstoxAuthError, UpstoxClient, UpstoxError } from "../_shared/upstox.ts";
 
 const CORS = {
@@ -115,6 +117,43 @@ async function scheduledTokenRequest(store: SupabaseStore): Promise<Record<strin
     await telegram(`⚠️ Couldn't send the Upstox approval request: ${(e as Error).message.slice(0, 200)}\nPlease log in on the dashboard: ${app.dashboard_url ?? ""}`);
     return { sent: false, reason: (e as Error).message };
   }
+}
+
+/** Phase 3: after each 15-min candle close (09:31 … 15:16 IST). Paper signals only — no orders. */
+async function candleScan(store: SupabaseStore): Promise<Record<string, unknown>> {
+  const today = todayIst();
+  const holidays = await jobs.resolveHolidays(new UpstoxClient(null), store, today);
+  if (!isTradingDay(today, holidays)) return { skipped: "not a trading day" };
+  const token = await store.getValidToken();
+  if (!token) {
+    await store.log("candle_scan", "warn", "No Upstox token — scan skipped");
+    return { skipped: "no token" };
+  }
+  const lv = await store.getLevelsFull({ date: today });
+  if (!lv) {
+    await store.log("candle_scan", "warn", `No levels for ${today} — scan skipped`);
+    return { skipped: "no levels" };
+  }
+  const client = new UpstoxClient(token);
+  const now = Date.now();
+  const intraday = (await client.intradayCandles(NIFTY_INDEX_KEY, "minutes", 15))
+    .filter((c) => c.t.startsWith(today) && new Date(c.t).getTime() + 15 * 60_000 <= now); // closed candles only
+  const history = await store.recent15m(today, 12);
+  const app = await store.app();
+  const res = await runScan({
+    today, candles: [...history, ...intraday], levels: lv, settings: settingsFrom(await store.settings()),
+    signalsToday: await store.signalsFor(today),
+    chain: async () => {
+      const inst = await store.getConfig<ExpiryCache>("instruments");
+      if (!inst || inst.for_date !== today) return null;
+      return { rows: await client.optionChain(NIFTY_INDEX_KEY, inst.trade_expiry), expiry: inst.trade_expiry, lotSize: inst.lot_size };
+    },
+    insert: (r) => store.insertSignal(r),
+    update: (id, p) => store.updateSignal(id, p),
+    notify: async (t) => { await sendTelegram(env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID"), t, app.dashboard_url); },
+    log: (level, m, data) => store.log("candle_scan", level, m, data),
+  });
+  return res;
 }
 
 // --------------------------------------------------------------------------- scheduled jobs
@@ -229,6 +268,7 @@ Deno.serve(async (req) => {
       if (action === "daily_levels") return json(await runJob(store, action, dailyLevels));
       if (action === "test_telegram") return json(await testTelegram(store));
       if (action === "request_token") return json(await scheduledTokenRequest(store));
+      if (action === "candle_scan") return json(await runJob(store, action, candleScan));
       throw new HttpError(400, `Unknown scheduled action: ${action}`);
     }
 
@@ -287,6 +327,9 @@ Deno.serve(async (req) => {
         try { return json(await requestToken(store, "dashboard")); }
         catch (e) { throw new HttpError(502, (e as Error).message); }
       }
+
+      case "candle_scan":
+        return json(await runJob(store, action, candleScan));
 
       // Manual "run now" of the scheduled jobs, for testing from the dashboard.
       case "premarket_check":
