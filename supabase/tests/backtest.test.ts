@@ -99,3 +99,11 @@ Deno.test("scalp: bias at 09:20, +20 index pts target, re-entry, max 3, SL and n
   eq(scalpDay(down, "CE", 10, null).map((x) => [x.status, x.pts]), [["TIME_EXIT", -40]]);
   eq(scalpDay(down, "CE", 10, 25).map((x) => [x.status, x.pts, x.exit_time]), [["SL", -50, "11:00"]]);
 });
+
+import { quickExit } from "../functions/_shared/quick.ts";
+
+Deno.test("quick target on B's entries: +20 index target, SL first in the same minute", () => {
+  eq(quickExit("CE", 100, "10:46", 80, [m("10:46", 100, 110, 95, 105), m("10:50", 105, 121, 104, 120)]), { status: "TARGET", exit: "10:50", price: 120 });
+  eq(quickExit("CE", 100, "10:46", 80, [m("10:46", 100, 121, 79, 105)]).status, "SL");
+  eq(quickExit("PE", 100, "10:46", 120, [m("10:46", 100, 101, 85, 90), m("15:14", 92, 93, 91, 92)]), { status: "TIME_EXIT", exit: "15:15", price: 92 });
+});
