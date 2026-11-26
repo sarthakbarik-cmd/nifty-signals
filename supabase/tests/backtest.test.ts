@@ -86,3 +86,16 @@ Deno.test("ORB: half at 2R then runner exits on a 15-min close below EMA20; SL; 
   const slow = simulateOrb("CE", 100, 90, "10:00", [m("10:05", 100, 103, 98, 102), m("10:45", 101, 102, 100, 101)], day15, ema);
   eq([slow.status, slow.exit, slow.pts], ["TIME_EXIT", "10:45", 1]);
 });
+
+import { bias09_20, scalpDay } from "../functions/_shared/scalp.ts";
+
+Deno.test("scalp: bias at 09:20, +20 index pts target, re-entry, max 3, SL and no-SL", () => {
+  eq(bias09_20(24300, { h: 24200, l: 24000, c: 24150 }), "CE");
+  eq(bias09_20(24100, { h: 24200, l: 24000, c: 24150 }), null); // inside CPR
+  const up = [m("10:00", 100, 105, 99, 104), m("10:03", 104, 121, 103, 120), m("10:04", 120, 141, 119, 140), m("10:05", 140, 161, 139, 160), m("10:06", 160, 181, 159, 180)];
+  const t = scalpDay(up, "CE", 10, null);
+  eq(t.map((x) => [x.entry_time, x.status, x.pts]), [["10:00", "TARGET", 20], ["10:04", "TARGET", 20], ["10:05", "TARGET", 20]]);
+  const down = [m("10:00", 100, 101, 99, 100), m("11:00", 100, 101, 40, 45), m("15:14", 60, 61, 59, 60)];
+  eq(scalpDay(down, "CE", 10, null).map((x) => [x.status, x.pts]), [["TIME_EXIT", -40]]);
+  eq(scalpDay(down, "CE", 10, 25).map((x) => [x.status, x.pts, x.exit_time]), [["SL", -50, "11:00"]]);
+});

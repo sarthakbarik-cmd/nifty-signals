@@ -5,6 +5,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { runBacktest, runPullbackBacktest } from "../_shared/backtest.ts";
 import { runOrbBacktest } from "../_shared/orb.ts";
+import { runScalpBacktest } from "../_shared/scalp.ts";
 import { type Candle, groupByDate } from "../_shared/candles.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { settingsFrom } from "../_shared/strategy.ts";
@@ -44,7 +45,8 @@ Deno.serve(async (req) => {
     const st = settingsFrom(await store.settings()), byDay = groupByDate(c1);
     const raw = await store.settings();
     const trades: object[] = [...runBacktest(c15, byDay, dailies, from, to, st), ...runPullbackBacktest(c15, byDay, dailies, from, to, st),
-      ...runOrbBacktest(c15, byDay, dailies, from, to, st.ema_fast, st.no_trade_band, Number(raw.cpr_narrow_pct ?? 0.25))];
+      ...runOrbBacktest(c15, byDay, dailies, from, to, st.ema_fast, st.no_trade_band, Number(raw.cpr_narrow_pct ?? 0.25)),
+      ...runScalpBacktest(byDay, dailies, from, to, st.no_trade_band)];
 
     const del = await store.db.from("backtest_trades").delete().gte("date", from).lte("date", to);
     if (del.error) throw new Error(del.error.message);
