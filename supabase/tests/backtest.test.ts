@@ -70,3 +70,19 @@ Deno.test("pullback: 2 green, 1 red, green resume → setup; half at 1.5R then t
   // T1 = 24165 at 10:20; 10:30 candle closes 10:45 with low 24160 → stop 24155; 10:50 low 24150 → runner out at 24155
   eq([ex.t1Time, ex.exit, ex.runner, ex.status, ex.pts], ["10:20", "10:50", 24155, "TARGET", 55]);
 });
+
+import { simulateOrb } from "../functions/_shared/orb.ts";
+
+Deno.test("ORB: half at 2R then runner exits on a 15-min close below EMA20; SL; time stop", () => {
+  const k15 = (hhmm: string, c: number): Candle => ({ t: `2026-11-25T${hhmm}:00+05:30`, o: c, h: c + 5, l: c - 5, c });
+  // entry 100 at 10:00, OR middle 90 → R 10, T1 120
+  const day15 = [k15("10:00", 110), k15("10:15", 118), k15("10:30", 112)];
+  const ema = new Map<string, number | null>([[day15[0].t, 100], [day15[1].t, 110], [day15[2].t, 115]]);
+  const win = [m("10:00", 100, 105, 99, 104), m("10:10", 104, 121, 103, 120), m("10:40", 113, 114, 111, 112), m("10:45", 112, 113, 110, 111)];
+  const ex = simulateOrb("CE", 100, 90, "10:00", win, day15, ema);
+  // 10:30 candle closes 112 < EMA 115 at 10:45 → runner out at 112: 0.5×20 + 0.5×12 = 16 pts
+  eq([ex.status, ex.exit, ex.runner, ex.pts, ex.t1Time], ["TARGET", "10:45", 112, 16, "10:10"]);
+  eq(simulateOrb("CE", 100, 90, "10:00", [m("10:05", 100, 101, 89, 90)], day15, ema).status, "SL");
+  const slow = simulateOrb("CE", 100, 90, "10:00", [m("10:05", 100, 103, 98, 102), m("10:45", 101, 102, 100, 101)], day15, ema);
+  eq([slow.status, slow.exit, slow.pts], ["TIME_EXIT", "10:45", 1]);
+});
