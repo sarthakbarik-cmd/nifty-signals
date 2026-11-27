@@ -535,9 +535,10 @@ $("btn-sig-refresh").onclick = loadSignals;
 // ---------- results (Phase 4)
 const rupee = (x) => `${x < 0 ? "−" : "+"}₹${Math.round(Math.abs(x)).toLocaleString("en-IN")}`;
 const CLOSED = ["TARGET", "SL", "TIME_EXIT"];
+// Main plan B is shown above; background plans are set in app_config.settings.shadow_variants (D, E).
 const VARIANT_NAMES = {
-  A: "A · spec SL, 2R", B: "B · ATR SL, 2R (main)", C: "C · signal-candle SL, 2R", D: "D · ATR SL, level target",
-  E: "E · half at 1.5R + trail", F: "F · half at 2R + trail", G: "G · E on trend days",
+  B: "B · ATR SL, 2R (main plan)", D: "D · ATR SL, next-level target", E: "E · green–red–green, half at 1.5R + trail",
+  A: "A · spec SL, 2R", C: "C · signal-candle SL, 2R", F: "F · half at 2R + trail", G: "G · E on trend days",
 };
 
 async function loadResults() {
@@ -588,11 +589,14 @@ async function loadResults() {
       return o;
     };
     const sv = agg(shadow), bv = agg(bt);
+    const shown = ["B", ...(Array.isArray(st.shadow_variants) ? st.shadow_variants : ["D", "E"])];
     vb.innerHTML = `<div class="table-wrap"><table class="signals">
       <tr><th>Plan</th><th>Paper period: trades</th><th>Winners</th><th>Total R</th><th>Avg R</th><th>12-month backtest: avg R</th></tr>
-      ${Object.keys(VARIANT_NAMES).map((v) => {
-        const a = sv[v], b = bv[v];
-        return `<tr><td>${esc(VARIANT_NAMES[v])}</td><td>${a?.n ?? 0}</td><td>${a ? a.w : "–"}</td>
+      ${shown.map((v) => {
+        const a = v === "B" ? null : sv[v], b = bv[v];
+        if (v === "B") return `<tr><td>${esc(VARIANT_NAMES.B)}</td><td colspan="4" class="hint">live paper trades — see above</td>
+          <td>${b ? `${num(b.r / b.n)} <span class="hint">(${b.n} trades)</span>` : "–"}</td></tr>`;
+        return `<tr><td>${esc(VARIANT_NAMES[v] ?? v)}</td><td>${a?.n ?? 0}</td><td>${a ? a.w : "–"}</td>
           <td class="${(a?.r ?? 0) >= 0 ? "up" : "down"}">${a ? num(a.r) : "–"}</td><td>${a ? num(a.r / a.n) : "–"}</td>
           <td>${b ? `${num(b.r / b.n)} <span class="hint">(${b.n} trades)</span>` : "–"}</td></tr>`;
       }).join("")}

@@ -6,7 +6,7 @@ import type { Candle } from "../_shared/candles.ts";
 import type { ExpiryCache } from "../_shared/levels.ts";
 import { sendTelegram } from "../_shared/notify.ts";
 import { runScan, type SignalRow } from "../_shared/scan.ts";
-import { paperSummary, shadowDay } from "../_shared/shadow.ts";
+import { DEFAULT_SHADOW, paperSummary, shadowDay } from "../_shared/shadow.ts";
 import { SupabaseStore } from "../_shared/store.ts";
 import { settingsFrom } from "../_shared/strategy.ts";
 import { istParts, isTradingDay, todayIst } from "../_shared/time.ts";
@@ -87,7 +87,8 @@ async function paperEod(store: SupabaseStore, date?: string) {
   const today1 = await store.getIntraday(today, "1m");
   let shadow: { variant: string; status: string; r_mult: number | null }[] = [];
   if (lv && prevDaily && today1.length) {
-    const rows = shadowDay(await store.recent15m(today, 12), await store.getIntraday(today, "15m"), today1, lv.based_on, prevDaily, today, st);
+    const keep = Array.isArray(raw.shadow_variants) ? (raw.shadow_variants as string[]) : DEFAULT_SHADOW;
+    const rows = shadowDay(await store.recent15m(today, 12), await store.getIntraday(today, "15m"), today1, lv.based_on, prevDaily, today, st, keep);
     const del = await store.db.from("shadow_trades").delete().eq("date", today);
     if (del.error) throw new Error(del.error.message);
     if (rows.length) { const ins = await store.db.from("shadow_trades").insert(rows); if (ins.error) throw new Error(ins.error.message); }

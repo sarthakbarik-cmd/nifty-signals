@@ -1,15 +1,20 @@
-// Phase 4 background ("shadow") variants: after the close, replay today's stored candles through every
-// research variant (A–G, incl. B as a cross-check of the live tracker). Same code as the backtest.
+// Phase 4 background ("shadow") plans: after the close, replay today's stored candles through the plans listed in
+// app_config.settings.shadow_variants (default D and E). Same code as the backtest.
 import { runBacktest, runPullbackBacktest } from "./backtest.ts";
 import type { Candle } from "./candles.ts";
 import type { SignalRow } from "./scan.ts";
 import type { StrategySettings } from "./strategy.ts";
 
-export function shadowDay(history15: Candle[], today15: Candle[], today1: Candle[], prevDate: string, prevDaily: Candle, today: string, s: StrategySettings) {
+/** Background plans to keep (owner's choice, 27 Nov 2026: D and E). Each plan is simulated independently. */
+export const DEFAULT_SHADOW = ["D", "E"];
+
+export function shadowDay(history15: Candle[], today15: Candle[], today1: Candle[], prevDate: string, prevDaily: Candle, today: string,
+  s: StrategySettings, keep: string[] = DEFAULT_SHADOW) {
   const c15 = [...history15, ...today15];
   const by = { [today]: today1 };
   const dailies = { [prevDate]: prevDaily };
-  return [...runBacktest(c15, by, dailies, today, today, s), ...runPullbackBacktest(c15, by, dailies, today, today, s)];
+  return [...runBacktest(c15, by, dailies, today, today, s), ...runPullbackBacktest(c15, by, dailies, today, today, s)]
+    .filter((t) => keep.includes(t.variant));
 }
 
 const sign = (x: number) => (x >= 0 ? "+" : "−");
@@ -31,8 +36,8 @@ export function paperSummary(today: string, todays: SignalRow[], allClosed: Sign
   if (taken.length) {
     const by: Record<string, number[]> = {};
     for (const t of taken) (by[t.variant] ??= []).push(t.r_mult ?? 0);
-    lines.push("", "Background variants today (R):");
+    lines.push("", "Background plans today (R):");
     lines.push(Object.keys(by).sort().map((v) => `${v} ${by[v].map((r) => `${r >= 0 ? "+" : ""}${r}`).join("/")}`).join(" · "));
-  } else lines.push("", "Background variants: no trades today.");
+  } else lines.push("", "Background plans: no trades today.");
   return lines.join("\n");
 }
