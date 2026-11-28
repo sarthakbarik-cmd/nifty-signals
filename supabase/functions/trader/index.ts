@@ -1,15 +1,20 @@
-// Edge Function `trader` — Practice (paper) trading + the real-account discipline watcher.
-// NEVER places, modifies or cancels a real order. Real-account actions are limited to READING positions and
-// switching Upstox's Kill Switch for NSE_FO/BSE_FO (lock at the daily limit, unlock the next trading morning).
+// Edge Function `trader` — Practice (paper) trading + the real-account discipline watcher (Level-2 auto-protect brain).
+// This function itself never sends an order. It reads positions, switches Upstox's Kill Switch for NSE_FO/BSE_FO,
+// and tells the paired Oracle executor (fixed IP) when to EXIT existing F&O positions or set Dhan's P&L Exit.
 //
-// Owner (dashboard JWT): underlyings | expiries {u} | chain {u, expiry} | state | place {...} | close {id} | tick
-// Scheduler (x-cron-secret): guard   — every minute; 09:00–15:30 IST on trading days (unlock, watch, lock, practice backup)
+// Owner (dashboard JWT): underlyings | expiries {u} | chain {u, expiry} | state | place | close {id} | tick
+//                        exec_approve {id} | exec_revoke {id} | dhan_token {client_id, token}
+// Scheduler (x-cron-secret): guard — every minute 08:45–15:30 IST: morning unlock, Dhan reminders, server heartbeat check,
+//                        practice backup tick, and the 1-minute Upstox watcher ONLY while the Oracle server is offline.
+// Oracle executor (own id + secret, paired from the dashboard): exec_hello | exec_sync — every 5 s; Supabase decides,
+//                        the executor (fixed IP) carries out exits / Dhan P&L-exit setup. Never opens a position.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.4";
 import {
   type GuardDay, guardMessage, guardStep, type Position, PRACTICE_DEFAULTS, practiceGate, practiceTick, type PTrade, UNDERLYINGS,
 } from "../_shared/practice.ts";
 import { sendTelegram } from "../_shared/notify.ts";
+import { dhanDecide, type DhanDay, type DhanPos, type ProtectCfg, protectMessage, type UpDay, upstoxDecide, type UpPos } from "../_shared/protect.ts";
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { ...CORS, "Content-Type": "application/json" } });
@@ -84,7 +89,8 @@ async function state() {
   const gate = practiceGate(trades, 0, now.toISOString(), r);
   return { date, rules: r, trades, realised: Math.round(realised), open_risk: Math.round(openRisk),
     budget_left: Math.max(0, Math.round(r.loss_limit + Math.min(0, realised) - openRisk)), blocked: gate,
-    guard: { day: await cfg("guard_day"), lock: await cfg("guard_lock"), limits: await guardCfg() }, underlyings: UNDERLYINGS };
+    guard: { day: await cfg("guard_day"), lock: await cfg("guard_lock"), limits: await guardCfg() }, underlyings: UNDERLYINGS,
+    protect: await protectState() };
 }
 
 async function guardCfg() { const s = (await cfg<Record<string, any>>("settings")) ?? {}; return { loss_limit: Number(s.guard_loss ?? 3000), target: Number(s.guard_target ?? 1500), enabled: s.guard_enabled !== false }; }
@@ -98,12 +104,29 @@ async function killSwitch(action: "DISABLE" | "ENABLE", only?: string[]) {
   return { changed: want, status: res.data };
 }
 
-async function guard() {
-  const now = new Date(), { date, hhmm } = ist(now);
+async function tradingNow(now = new Date()) {
+  const { date, hhmm } = ist(now);
   const holidays = new Set<string>(((await cfg<{ dates: string[] }>("holidays"))?.dates ?? []));
-  if (wd(date) > 4 || holidays.has(date) || hhmm < "09:00" || hhmm > "15:30") return { skipped: "outside market hours" };
-  if (!(await token())) return { skipped: "no token" };
+  return { date, hhmm, trading: wd(date) <= 4 && !holidays.has(date) };
+}
+
+async function guard() {
+  const now = new Date(), { date, hhmm, trading } = await tradingNow(now);
+  if (!trading || hhmm < "08:45" || hhmm > "15:30") return { skipped: "outside market hours" };
   const out: Record<string, unknown> = {};
+  out.dhan = await dhanReminder(date, hhmm);
+  const ex = await activeExecutor();
+  const online = ex?.last_seen && now.getTime() - Date.parse(ex.last_seen) < 90_000;
+  out.executor = ex ? (online ? "online" : "offline") : "not paired";
+  if (ex && !online && hhmm >= "09:15") {
+    const st = (await cfg<{ date: string; at: number }>("exec_alert")) ?? { date: "", at: 0 };
+    if (st.date !== date || now.getTime() - st.at > 30 * 60_000) {
+      await telegram(`⚠️ Your nifty-guard server hasn't checked in since ${ex.last_seen ? new Date(ex.last_seen).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour12: false }) : "it was paired"}. Auto-exit is paused — the 1-minute watcher (alerts + kill switch) is covering until it is back.`);
+      await setCfg("exec_alert", { date, at: now.getTime() });
+    }
+  }
+  if (hhmm < "09:00") return out;
+  if (!(await token())) return { ...out, skipped: "no token" };
   // 1. morning unlock of a previous day's app lock (after Upstox's 12-hour cooling period)
   const lock = await cfg<{ locked_at: string; segments: string[] }>("guard_lock");
   if (lock && ist(new Date(lock.locked_at)).date < date && now.getTime() - Date.parse(lock.locked_at) >= 12 * 3600_000) {
@@ -116,9 +139,9 @@ async function guard() {
     } catch (e) { await log("warn", `Morning unlock failed: ${(e as Error).message}`); out.unlock_error = (e as Error).message; }
   }
   if (hhmm < "09:15") return out;
-  // 2. watch today's real P&L
+  // 2. watch today's real P&L — only while the Oracle executor is offline (it does this every 5 s with auto-exit)
   const g = await guardCfg();
-  if (g.enabled) {
+  if (g.enabled && !online) {
     let day = await cfg<GuardDay>("guard_day");
     if (!day || day.date !== date) day = { date, alerts: [] };
     const positions = ((await up("/v2/portfolio/short-term-positions")).data ?? []) as Position[];
@@ -145,6 +168,104 @@ async function guard() {
   return out;
 }
 
+// --------------------------------------------------------------------------- Level 2: Oracle executor + Dhan
+async function activeExecutor(): Promise<{ id: string; last_seen: string | null } | null> {
+  const { data } = await db.rpc("srv_exec_list");
+  return ((data ?? []) as any[]).find((x) => x.paired) ?? null;
+}
+async function protectCfg(): Promise<ProtectCfg> {
+  const s = (await cfg<Record<string, any>>("settings")) ?? {};
+  return { loss_limit: Number(s.guard_loss ?? 3000), target: Number(s.guard_target ?? 1500), floor: Number(s.protect_floor ?? 1000) };
+}
+async function dhanToken(): Promise<{ client_id: string; token: string; saved_at: string; expires_at: string } | null> {
+  const { data } = await db.rpc("srv_dhan_get");
+  return ((data ?? []) as any[])[0] ?? null;
+}
+async function protectState() {
+  const { data } = await db.rpc("srv_exec_list");
+  const d = await dhanToken();
+  return { executors: data ?? [], up: await cfg("protect_up"), dhan: await cfg("protect_dhan"),
+    dhan_token: d ? { client_id: d.client_id.replace(/.(?=.{3})/g, "•"), saved_at: d.saved_at, expires_at: d.expires_at } : null };
+}
+
+/** 08:45 and then every 15 min from 09:20 to 10:30: remind to paste the Dhan token (if none for today). */
+async function dhanReminder(date: string, hhmm: string) {
+  const d = await dhanToken();
+  if (d && ist(new Date(d.saved_at)).date === date) return "token ok";
+  const r = (await cfg<{ date: string; last: string }>("dhan_remind")) ?? { date: "", last: "" };
+  const due = (r.date !== date && hhmm >= "08:45") || (r.date === date && hhmm >= "09:20" && hhmm <= "10:30" &&
+    Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3)) - (Number(r.last.slice(0, 2)) * 60 + Number(r.last.slice(3))) >= 15);
+  if (!due) return "waiting for token";
+  const app = await cfg<{ dashboard_url?: string }>("app");
+  await telegram(`🔑 Paste today's Dhan access token on the dashboard (Practice tab → Dhan) so your P&L Exit (−₹3,000 / +₹1,500, kill switch ON) can be set. Get it from web.dhan.co → Profile → Trading & Data APIs.${app?.dashboard_url ? "" : ""}`);
+  await setCfg("dhan_remind", { date, last: hhmm });
+  return "reminded";
+}
+
+const upstoxCfgDefault = (date: string): UpDay => ({ date, alerts: [], mode: "NORMAL" });
+
+/** Executor sync (every 5 s): record heartbeat, decide, return tokens + actions. */
+async function execSync(body: Record<string, any>) {
+  const { data: ok } = await db.rpc("srv_exec_auth", { p_id: body.id, p_secret: body.secret });
+  if (!ok) throw new HttpError(401, "executor not paired");
+  const now = new Date(), { date, hhmm, trading } = await tradingNow(now);
+  const live = trading && hhmm >= "09:00" && hhmm <= "15:30";
+  if (!live) return { idle: true, interval_ms: 60_000 };
+  const cfgP = await protectCfg();
+  const out: Record<string, any> = { idle: false, interval_ms: 5_000, actions: { upstox: [], dhan: [] }, tokens: {} };
+  const tok = await token();
+  if (tok) out.tokens.upstox = tok;
+  const dt = await dhanToken();
+  if (dt) out.tokens.dhan = { client_id: dt.client_id, token: dt.token };
+
+  // results of earlier actions
+  for (const r of (body.results ?? []) as { broker: string; type: string; ok: boolean; detail?: string }[]) {
+    await log(r.ok ? "info" : "error", `executor ${r.broker} ${r.type}: ${r.ok ? "ok" : "FAILED"} ${r.detail ?? ""}`.trim());
+    if (r.broker === "dhan" && r.type === "SET_PNL_EXIT") {
+      const dd = (await cfg<DhanDay>("protect_dhan")) ?? { date, alerts: [] };
+      if (r.ok) { dd.pnl_exit_set = true; await telegram(`✅ Dhan P&L Exit set for today: loss ₹${cfgP.loss_limit.toLocaleString("en-IN")} · profit ₹${cfgP.target.toLocaleString("en-IN")} · kill switch ON. Dhan will exit and lock automatically.`); }
+      else if (!dd.alerts.includes("PNL_EXIT_FAIL")) { dd.alerts.push("PNL_EXIT_FAIL"); await telegram(`⚠️ Couldn't set Dhan P&L Exit: ${(r.detail ?? "").slice(0, 160)}. Please set it in the Dhan app (Profile → Trader's Controls → P&L Exit).`); }
+      await setCfg("protect_dhan", dd);
+    }
+    if (r.broker === "upstox" && !r.ok) await telegram(`⚠️ Upstox ${r.type} failed: ${(r.detail ?? "").slice(0, 160)}. Please exit your F&O positions manually now.`);
+  }
+
+  // Upstox
+  if (tok && Array.isArray(body.upstox_positions)) {
+    let day = await cfg<UpDay>("protect_up");
+    if (!day || day.date !== date) day = upstoxCfgDefault(date);
+    const s = upstoxDecide(day, body.upstox_positions as UpPos[], cfgP);
+    for (const a of s.alerts) await telegram(protectMessage("Upstox", a, s.pnl, cfgP));
+    out.actions.upstox = s.actions;
+    if (s.lockNow) {
+      try {
+        const k = await killSwitch("DISABLE");
+        day.mode = "LOCKED";
+        await setCfg("guard_lock", { locked_at: now.toISOString(), segments: k.changed.length ? k.changed : ["NSE_FO", "BSE_FO"], trigger: day.alerts.includes("LOSS") ? "LOSS" : "TARGET" });
+        await telegram(`🔒 Upstox F&O LOCKED at ${hhmm} — no new F&O orders for 12 hours. Unlocks automatically next trading morning.`);
+        await log("info", "Kill switch: locked by executor flow", { pnl: s.pnl, changed: k.changed });
+      } catch (e) { await log("error", `Kill switch lock failed: ${(e as Error).message}`); }
+    }
+    day.at = hhmm;
+    await setCfg("protect_up", day);
+    await setCfg("guard_day", { date, alerts: day.alerts, pnl: s.pnl, at: hhmm, locked_by_app: day.mode === "LOCKED", open_fo: s.openFo, mode: day.mode });
+  } else if (body.upstox_error) await log("warn", `executor upstox: ${String(body.upstox_error).slice(0, 200)}`);
+
+  // Dhan
+  if (dt && Array.isArray(body.dhan_positions)) {
+    let dd = await cfg<DhanDay>("protect_dhan");
+    if (!dd || dd.date !== date) dd = { date, alerts: [] };
+    const s = dhanDecide(dd, body.dhan_positions as DhanPos[], cfgP);
+    for (const a of s.alerts) await telegram(protectMessage("Dhan", a, s.pnl, cfgP));
+    if (s.setPnlExit && ist(new Date(dt.saved_at)).date === date) {
+      out.actions.dhan.push({ type: "SET_PNL_EXIT", profitValue: cfgP.target, lossValue: cfgP.loss_limit, productType: ["INTRADAY"], enableKillSwitch: true });
+    }
+    dd.at = hhmm;
+    await setCfg("protect_dhan", dd);
+  } else if (body.dhan_error) await log("warn", `executor dhan: ${String(body.dhan_error).slice(0, 200)}`);
+  return out;
+}
+
 async function requireOwner(req: Request) {
   const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const { data, error } = await db.auth.getUser(jwt);
@@ -165,8 +286,34 @@ Deno.serve(async (req) => {
       if (action === "guard") return json(await guard());
       throw new HttpError(400, `unknown scheduled action ${action}`);
     }
+    if (action === "exec_hello") {
+      const ok = /^[0-9a-f-]{36}$/.test(String(body.id)) && /^[0-9a-f]{64}$/.test(String(body.secret_sha)) && /^[A-Z0-9]{6}$/.test(String(body.code));
+      if (!ok) throw new HttpError(400, "bad hello");
+      const { data, error } = await db.rpc("srv_exec_hello", { p_id: body.id, p_secret_sha: body.secret_sha, p_code: body.code,
+        p_ip: String(body.ip ?? "").slice(0, 45), p_version: String(body.version ?? "").slice(0, 20) });
+      if (error) throw new Error(error.message);
+      if (data === "pending") {
+        const seen = (await cfg<{ id: string }>("exec_hello_seen"))?.id;
+        if (seen !== body.id) { await setCfg("exec_hello_seen", { id: body.id }); await telegram(`🖥️ Server ${String(body.ip ?? "")} asks to pair (code ${body.code}). Approve it on the dashboard → Practice tab.`); }
+      }
+      return json({ status: data });
+    }
+    if (action === "exec_sync") return json(await execSync(body));
     await requireOwner(req);
     switch (action) {
+      case "exec_approve": { const { data } = await db.rpc("srv_exec_approve", { p_id: body.id }); await log("info", "executor approved", { id: body.id }); return json({ ok: data, state: await state() }); }
+      case "exec_revoke": { const { data } = await db.rpc("srv_exec_revoke", { p_id: body.id }); await log("info", "executor revoked", { id: body.id }); return json({ ok: data, state: await state() }); }
+      case "dhan_token": {
+        const client = String(body.client_id ?? "").trim(), tok = String(body.token ?? "").trim();
+        if (!/^\d{6,12}$/.test(client)) throw new HttpError(400, "Dhan client ID should be 6–12 digits");
+        if (tok.length < 50 || tok.length > 4000 || /\s/.test(tok)) throw new HttpError(400, "That doesn't look like a Dhan access token");
+        const { error } = await db.rpc("srv_dhan_save", { p_client: client, p_token: tok });
+        if (error) throw new Error(error.message);
+        const dd = await cfg<DhanDay>("protect_dhan");
+        if (dd && dd.date === ist().date) { dd.pnl_exit_set = false; await setCfg("protect_dhan", dd); }
+        await log("info", "Dhan token saved (owner)");
+        return json(await state());
+      }
       case "underlyings": return json(UNDERLYINGS);
       case "expiries": {
         const u = UNDERLYINGS[String(body.u)]; if (!u) throw new HttpError(400, "unknown underlying");

@@ -625,6 +625,7 @@ const marketOpen = () => { const d = new Date().toLocaleDateString("en-US", { ti
 const rs = (x) => `${x < 0 ? "−" : x > 0 ? "+" : ""}₹${Math.round(Math.abs(x)).toLocaleString("en-IN")}`;
 
 async function practiceOpen() {
+  protectRefresh();
   try {
     if (!P.unders) {
       P.unders = await trader("underlyings");
@@ -720,7 +721,51 @@ function renderPracticeState(st) {
     kpi("Last check", day?.at ?? "–"),
     kpi("Lock", g.lock ? `since ${fmtTime(g.lock.locked_at)} · unlocks next trading morning` : "none"),
   ].join("");
+  if (st.protect) renderProtect(st);
 }
+
+// ---------- Level 2 auto-protect (Oracle executor pairing + Dhan token)
+function renderProtect(st) {
+  const kpi = (l, v, c = "") => `<div class="kpi"><span>${l}</span><b class="${c}">${v}</b></div>`;
+  const pr = st.protect ?? {}, ex = pr.executors ?? [];
+  const ago = (t) => { if (!t) return "never"; const s = Math.round((Date.now() - Date.parse(t)) / 1000); return s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : fmtTime(t); };
+  $("x-exec").innerHTML = ex.length ? `<div class="table-wrap"><table class="signals"><tr><th>Code</th><th>IP</th><th>Status</th><th>Last check-in</th><th></th></tr>
+    ${ex.map((e) => `<tr><td><b>${esc(e.code)}</b></td><td>${esc(e.ip ?? "")}<br><span class="hint">v${esc(e.version ?? "")}</span></td>
+      <td><span class="pill ${e.paired ? "ok" : "warn"}">${e.paired ? "paired" : "waiting for you"}</span></td><td>${esc(ago(e.last_seen))}</td>
+      <td>${e.paired ? "" : `<button class="x-approve" data-id="${esc(e.id)}" data-code="${esc(e.code)}">Approve</button> `}<button class="x-revoke" data-id="${esc(e.id)}">Remove</button></td></tr>`).join("")}
+    </table></div>` : `<p class="hint">No server has asked to pair yet. Once it is installed it shows a 6-character code here.</p>`;
+  document.querySelectorAll(".x-approve").forEach((b) => (b.onclick = async () => {
+    if (!confirm(`Approve server with code ${b.dataset.code}? Only approve if this is the code your server printed.`)) return;
+    try { renderProtect(await trader("exec_approve", { id: b.dataset.id })); $("x-msg").textContent = "✅ Server paired."; } catch (e) { $("x-msg").textContent = e.message; }
+  }));
+  document.querySelectorAll(".x-revoke").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Remove this server? It will stop protecting your accounts until paired again.")) return;
+    try { renderProtect(await trader("exec_revoke", { id: b.dataset.id })); } catch (e) { $("x-msg").textContent = e.message; }
+  }));
+  const today = st.date, dt = pr.dhan_token, dd = pr.dhan && pr.dhan.date === today ? pr.dhan : null;
+  const tokToday = dt && new Date(dt.saved_at).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }) === today;
+  $("x-dhan").innerHTML = [
+    kpi("Token", dt ? `${tokToday ? "✅ today" : "⚠️ old"} · ${esc(dt.client_id)}` : "❌ not saved", dt && tokToday ? "up" : "down"),
+    kpi("P&L Exit", dd?.pnl_exit_set ? "✅ set (−₹3,000 / +₹1,500)" : "not set yet"),
+    kpi("Dhan P&L", dd ? rs(dd.pnl ?? 0) : "–", (dd?.pnl ?? 0) >= 0 ? "up" : "down"), kpi("Last check", dd?.at ?? "–"),
+  ].join("");
+  const u = pr.up && pr.up.date === today ? pr.up : null;
+  const modeTxt = { NORMAL: "🟢 normal", TARGET_PROTECT: "🎯 target hit · protecting +₹1,000", LOSS_EXIT: "🛑 loss limit · exiting", FLOOR_EXIT: "🔐 floor · exiting", LOCKED: "🔒 locked" };
+  $("x-up").innerHTML = [
+    kpi("Mode", u ? modeTxt[u.mode] ?? esc(u.mode) : "–"), kpi("Upstox P&L", u ? rs(u.pnl ?? 0) : "–", (u?.pnl ?? 0) >= 0 ? "up" : "down"),
+    kpi("Last check", u?.at ?? "–"),
+  ].join("");
+}
+async function protectRefresh() { try { renderProtect(await trader("state")); } catch (e) { $("x-msg").textContent = e.message; } }
+$("x-refresh").onclick = protectRefresh;
+$("x-dsave").onclick = async () => {
+  const client_id = $("x-dclient").value.trim(), token = $("x-dtoken").value.trim();
+  if (!client_id || !token) { $("x-msg").textContent = "Enter both the client ID and the token."; return; }
+  $("x-dsave").disabled = true;
+  try { renderProtect(await trader("dhan_token", { client_id, token })); $("x-dtoken").value = ""; $("x-msg").textContent = "✅ Dhan token saved. The server will set your P&L Exit within a few seconds (market days 09:00–15:30)."; }
+  catch (e) { $("x-msg").textContent = `⛔ ${e.message}`; }
+  finally { $("x-dsave").disabled = false; }
+};
 
 if (new URLSearchParams(location.search).get("upstox") === "ok") {
   history.replaceState(null, "", location.pathname);

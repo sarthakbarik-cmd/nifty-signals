@@ -114,8 +114,27 @@
           <div class="card-head"><h2>Real account watcher</h2><span id="g-status" class="pill">–</span></div>
           <p class="hint">Reads your real Upstox P&amp;L every minute (09:15–15:30). At the daily limit it locks NSE &amp; BSE F&amp;O with
             Upstox's Kill Switch (once you have no open F&amp;O position) and unlocks it automatically the next trading morning.
-            It never places, changes or cancels an order.</p>
+            This 1-minute watcher only alerts and locks; exits are done by Level 2 below.</p>
           <div id="g-kpis" class="kpis"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Level 2 auto-protect</h2><button id="x-refresh">Check now</button></div>
+          <p class="hint">Your Oracle server (fixed IP) checks Upstox &amp; Dhan every 5 seconds. It can only <b>cancel pending F&amp;O orders,
+            exit existing F&amp;O positions</b> and set Dhan's P&amp;L Exit — it never opens a trade.</p>
+          <h3>Server</h3>
+          <div id="x-exec"></div>
+          <h3>Dhan — today's access token</h3>
+          <p class="hint">Each morning: web.dhan.co → Profile → Trading &amp; Data APIs → generate an access token, then paste it here.
+            It is stored only on the server and expires in 24 hours.</p>
+          <div class="p-controls">
+            <label>Client ID <input id="x-dclient" inputmode="numeric" autocomplete="off" placeholder="e.g. 1100xxxxxx"></label>
+            <label>Access token <input id="x-dtoken" type="password" autocomplete="off" placeholder="paste token"></label>
+            <button id="x-dsave">Save token</button>
+          </div>
+          <div id="x-dhan" class="kpis"></div>
+          <h3>Upstox</h3>
+          <div id="x-up" class="kpis"></div>
+          <p id="x-msg" class="hint"></p>
         </section>
         <section class="card">
           <div class="card-head"><h2>Practice trading <span class="pill">📝 paper</span></h2><button id="p-refresh">Refresh</button></div>

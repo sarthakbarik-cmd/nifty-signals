@@ -122,3 +122,11 @@ cd supabase && deno test --allow-read tests/
   of the −₹3,000 limit; at −₹3,000 or +₹1,500 it switches on Upstox's **Kill Switch** for NSE_FO + BSE_FO as soon as no F&O position
   is open (Upstox requires that), and unlocks the next trading morning after the 12-hour cooling period.
   The app still never places, modifies or cancels an order. State: `app_config` keys `guard_day`, `guard_lock`.
+
+## Level 2 auto-protect (Oracle server, fixed IP 130.210.3.221)
+- `oracle/executor.ts` runs on the Oracle Always-Free VM (installed by `oracle/install.sh`, systemd `nifty-guard`, hourly self-update).
+  It only makes outgoing calls: every 5 s it reads Upstox + Dhan positions, sends them to the `trader` function, and carries out what it is told.
+- It can only **cancel pending F&O orders, exit existing F&O positions** (marketable LIMIT, tag `nifty-guard-exit`) and **set Dhan's P&L Exit**. It never opens a trade.
+- Upstox rules: −₹3,000 → cancel + exit all F&O → Kill Switch. +₹1,500 → open trades may run, any new F&O position is exited, P&L back to +₹1,000 → exit all → lock.
+- Dhan: paste the daily access token on the dashboard (Practice tab); the server sets P&L Exit (loss ₹3,000 / profit ₹1,500, kill switch ON).
+- Pairing: the server prints a 6-character code; approve the matching code on the dashboard. If the server goes silent for 90 s, Telegram warns and the 1-minute watcher covers alerts + Kill Switch.
