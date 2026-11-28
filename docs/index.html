@@ -3,23 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Nifty Signals</title>
-  <meta name="theme-color" content="#eef2fb" media="(prefers-color-scheme: light)" />
-  <meta name="theme-color" content="#0b0f1d" media="(prefers-color-scheme: dark)" />
+  <title>Nifty Desk</title>
+  <meta name="theme-color" content="#f4f5f8" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0c0e13" media="(prefers-color-scheme: dark)" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..700&display=swap" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div class="backdrop" aria-hidden="true"><i></i><i></i><i></i></div>
-  <header>
-    <h1>Nifty Signals <span class="tag">Phase 4 · Paper trading</span></h1>
-    <div id="user-box"></div>
-  </header>
-
-  <main>
-    <section id="signed-out" class="card hidden">
+  <main id="signed-out" class="hidden">
+    <section class="card signin-card">
+      <div class="brand"><div class="logo">N</div><div><b>Nifty Desk</b><small>Signals · Practice · Guard</small></div></div>
       <h2>Sign in</h2>
       <form id="signin-form" class="signin">
         <label>Email <input type="email" id="si-email" autocomplete="username" required /></label>
@@ -29,70 +24,104 @@
       <p id="signin-error" class="error"></p>
       <p class="hint">Owner account only (created in Supabase → Authentication → Users).</p>
     </section>
+  </main>
 
-    <div id="app" class="hidden">
+  <div id="app" class="hidden">
+    <aside class="side">
+      <div class="brand"><div class="logo">N</div><div><b>Nifty Desk</b><small>Signals · Practice · Guard</small></div></div>
       <nav class="tabs" role="tablist">
-        <button role="tab" data-tab="today" aria-selected="true">Today</button>
-        <button role="tab" data-tab="signals" aria-selected="false">Signals</button>
-        <button role="tab" data-tab="results" aria-selected="false">Results</button>
-        <button role="tab" data-tab="practice" aria-selected="false">Practice</button>
-        <button role="tab" data-tab="data" aria-selected="false">Data</button>
+        <button role="tab" data-tab="today" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5M5.5 9.5V20h13V9.5"/></svg>Overview</button>
+        <button role="tab" data-tab="signals" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>Setups</button>
+        <button role="tab" data-tab="results" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M5 20V11M11 20V5M17 20v-7M3 20h18"/></svg>Performance</button>
+        <button role="tab" data-tab="practice" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/></svg>Practice Desk</button>
+        <button role="tab" data-tab="guard" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M12 3l7.5 3.5v5c0 4.6-3.2 7.9-7.5 9-4.3-1.1-7.5-4.4-7.5-9v-5z"/></svg>Account Guard</button>
+        <span class="nav-sect">System</span>
+        <button role="tab" data-tab="data" aria-selected="false"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7.5" ry="3"/><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/></svg>Data &amp; Logs</button>
       </nav>
+      <div class="side-foot">
+        <div id="side-status" class="side-status">–</div>
+        <div id="user-box"></div>
+      </div>
+    </aside>
 
-      <!-- ================= TODAY ================= -->
+    <main class="content">
+      <!-- ================= OVERVIEW ================= -->
       <div id="tab-today">
-        <section class="card">
-          <h2>Upstox</h2>
-          <div id="upstox-status" class="status">Loading…</div>
-          <div class="row">
-            <button id="btn-upstox-request" class="primary">📲 Send approval to my phone</button>
-            <button id="btn-upstox">Login to Upstox</button>
+        <div class="pagehead"><h1>Overview</h1><p id="ov-sub">Signals, levels and today's discipline at a glance.</p></div>
+
+        <div id="ov-tiles" class="tiles">
+          <div class="tile"><span>Trend Rider · paper P&amp;L</span><b>–</b><small>&nbsp;</small></div>
+          <div class="tile"><span>Win rate</span><b>–</b><small>&nbsp;</small></div>
+          <div class="tile"><span>Today · real account</span><b>–</b><small>&nbsp;</small></div>
+          <div class="tile"><span>Practice desk</span><b>–</b><small>&nbsp;</small></div>
+        </div>
+
+        <div class="ov-grid">
+          <section class="card">
+            <div class="card-head">
+              <h2 id="chart-title">Chart</h2>
+              <button id="btn-live">Refresh</button>
+            </div>
+            <div id="lv-chart" class="chart-box"></div>
+            <div id="lv-legend" class="legend"></div>
+          </section>
+
+          <div class="ov-col">
+            <section class="card">
+              <h2>Broker connection</h2>
+              <div id="upstox-status" class="status">Loading…</div>
+              <div class="row">
+                <button id="btn-upstox-request" class="primary">Send approval to my phone</button>
+                <button id="btn-upstox">Login to Upstox</button>
+              </div>
+              <p id="upstox-request-msg" class="hint"></p>
+              <p class="hint">The Upstox token expires every day at 03:30 IST. At 08:45 on trading days an approval request is sent
+                to your Upstox app and WhatsApp automatically — just tap Approve. The Login button is the backup.</p>
+            </section>
+            <section class="card">
+              <div class="card-head"><h2>Account guard</h2><span class="sub-label">live</span></div>
+              <table id="ov-guard" class="lv-list"><tr><td class="hint">Loading…</td></tr></table>
+            </section>
           </div>
-          <p id="upstox-request-msg" class="hint"></p>
-          <p class="hint">The Upstox token expires every day at 03:30 IST. At 08:45 on trading days an approval request is sent
-            to your Upstox app and WhatsApp automatically — just tap Approve. The Login button is the backup.</p>
+        </div>
+
+        <section class="card">
+          <div class="card-head"><h2>Today's setups</h2><span class="sub-label">Trend Rider · paper only</span></div>
+          <div id="ov-setups"><p class="hint">Loading…</p></div>
         </section>
 
         <section class="card">
           <div class="card-head">
-            <h2>Levels</h2>
+            <h2>Key levels</h2>
             <div class="row tight">
-              <button id="btn-lv-prev" aria-label="Previous levels">◀</button>
+              <button id="btn-lv-prev" aria-label="Previous levels">‹</button>
               <input type="date" id="lv-date" />
-              <button id="btn-lv-next" aria-label="Next levels">▶</button>
+              <button id="btn-lv-next" aria-label="Next levels">›</button>
             </div>
           </div>
           <div id="levels"></div>
         </section>
-
-        <section class="card">
-          <div class="card-head">
-            <h2 id="chart-title">Chart</h2>
-            <button id="btn-live">Refresh</button>
-          </div>
-          <div id="lv-chart" class="chart-box"></div>
-          <div id="lv-legend" class="legend"></div>
-        </section>
       </div>
 
-      <!-- ================= SIGNALS ================= -->
+      <!-- ================= SETUPS ================= -->
       <div id="tab-signals" class="hidden">
+        <div class="pagehead"><h1>Setups</h1><p>Every Trend Rider setup the scanner found — paper signals only, the app never places orders.</p></div>
         <section class="card">
           <div class="card-head">
-            <h2>Signals</h2>
+            <h2>All setups</h2>
             <button id="btn-sig-refresh">Refresh</button>
           </div>
-          <p class="hint">Paper signals only — the app never places orders. PENDING = waiting for the trigger during the
-            next 15-min candle; SKIPPED = a setup formed but a rule blocked it (reason shown).</p>
+          <p class="hint">PENDING = waiting for the trigger during the next 15-min candle; SKIPPED = a setup formed but a rule blocked it (reason shown).</p>
           <div id="signals"></div>
         </section>
       </div>
 
-      <!-- ================= RESULTS ================= -->
+      <!-- ================= PERFORMANCE ================= -->
       <div id="tab-results" class="hidden">
+        <div class="pagehead"><h1>Performance</h1><p>How the main plan and the shadow plans are doing on paper.</p></div>
         <section class="card">
           <div class="card-head">
-            <h2>Paper results · main plan B</h2>
+            <h2>Trend Rider · paper performance</h2>
             <button id="btn-res-refresh">Refresh</button>
           </div>
           <p class="hint">Paper trades only — no orders are ever placed. Entry and exit use the option's real 1-minute
@@ -101,24 +130,61 @@
           <div id="res-trades"></div>
         </section>
         <section class="card">
-          <h2>Background plans</h2>
-          <p class="hint">Each day is replayed after the close through the background plans (now D and E), in R (1R = the trade's risk).
+          <h2>Shadow plans</h2>
+          <p class="hint">Each day is replayed after the close through the shadow plans (now D and E), in R (1R = the trade's risk).
             “12-month backtest” is the same plan over Nov 2025 – Nov 2026, for comparison.</p>
           <div id="res-variants"></div>
         </section>
       </div>
 
-      <!-- ================= PRACTICE ================= -->
+      <!-- ================= PRACTICE DESK ================= -->
       <div id="tab-practice" class="hidden">
+        <div class="pagehead"><h1>Practice Desk</h1><p>Paper trades on live prices, with the same rules as real trading.</p></div>
         <section class="card">
-          <div class="card-head"><h2>Real account watcher</h2><span id="g-status" class="pill">–</span></div>
+          <div class="card-head"><h2>Practice desk <span class="pill">paper</span></h2><button id="p-refresh">Refresh</button></div>
+          <div id="p-kpis" class="kpis"></div>
+          <p id="p-blocked" class="error hidden"></p>
+          <div class="p-controls">
+            <label>Index <select id="p-u"></select></label>
+            <label>Expiry <select id="p-exp"></select></label>
+            <span id="p-spot" class="hint"></span>
+          </div>
+          <div id="p-ladder"></div>
+        </section>
+        <section class="card" id="p-ticket-card">
+          <h2>New order</h2>
+          <p id="p-sel" class="hint">Tap a CE or PE price above to choose a contract.</p>
+          <div class="p-ticket">
+            <label>Lots <input id="p-lots" type="number" min="1" max="20" value="1"></label>
+            <label>Target (pts) <input id="p-tgt" type="number" min="1" step="0.5"></label>
+            <label>Stop-loss (pts) <input id="p-sl" type="number" min="1" step="0.5"></label>
+            <label class="p-check"><input id="p-trail" type="checkbox"> Trail SL</label>
+          </div>
+          <p id="p-preview" class="hint"></p>
+          <button id="p-buy" class="primary" disabled>Paper buy</button>
+          <p id="p-msg" class="hint"></p>
+        </section>
+        <section class="card">
+          <h2>Today's book</h2>
+          <div id="p-trades"></div>
+          <p class="hint">Rules: SL and target required · each trade also closes at +₹1,500 · max 3 trades a day · 30-minute cooldown after a loss ·
+            locked once today's loss (closed + open risk) would pass ₹3,000. Trail SL: at +1×SL the SL moves to entry, at +1.5×SL it locks +0.5×SL,
+            then follows 1×SL below the high.</p>
+        </section>
+      </div>
+
+      <!-- ================= ACCOUNT GUARD ================= -->
+      <div id="tab-guard" class="hidden">
+        <div class="pagehead"><h1>Account Guard</h1><p>Daily limits on your real Upstox and Dhan accounts: −₹3,000 loss · +₹1,500 target.</p></div>
+        <section class="card">
+          <div class="card-head"><h2>Daily limit watcher</h2><span id="g-status" class="pill">–</span></div>
           <p class="hint">Reads your real Upstox P&amp;L every minute (09:15–15:30). At the daily limit it locks NSE &amp; BSE F&amp;O with
             Upstox's Kill Switch (once you have no open F&amp;O position) and unlocks it automatically the next trading morning.
-            This 1-minute watcher only alerts and locks; exits are done by Level 2 below.</p>
+            This 1-minute watcher only alerts and locks; exits are done by auto-protect below.</p>
           <div id="g-kpis" class="kpis"></div>
         </section>
         <section class="card">
-          <div class="card-head"><h2>Level 2 auto-protect</h2><button id="x-refresh">Check now</button></div>
+          <div class="card-head"><h2>Auto-protect · Level 2</h2><button id="x-refresh">Check now</button></div>
           <p class="hint">Your Oracle server (fixed IP) checks Upstox &amp; Dhan every 5 seconds. It can only <b>cancel pending F&amp;O orders,
             exit existing F&amp;O positions</b> and set Dhan's P&amp;L Exit — it never opens a trade.</p>
           <h3>Server</h3>
@@ -136,43 +202,13 @@
           <div id="x-up" class="kpis"></div>
           <p id="x-msg" class="hint"></p>
         </section>
-        <section class="card">
-          <div class="card-head"><h2>Practice trading <span class="pill">📝 paper</span></h2><button id="p-refresh">Refresh</button></div>
-          <div id="p-kpis" class="kpis"></div>
-          <p id="p-blocked" class="error hidden"></p>
-          <div class="p-controls">
-            <label>Index <select id="p-u"></select></label>
-            <label>Expiry <select id="p-exp"></select></label>
-            <span id="p-spot" class="hint"></span>
-          </div>
-          <div id="p-ladder"></div>
-        </section>
-        <section class="card" id="p-ticket-card">
-          <h2>Order ticket</h2>
-          <p id="p-sel" class="hint">Tap a CE or PE price above to choose a contract.</p>
-          <div class="p-ticket">
-            <label>Lots <input id="p-lots" type="number" min="1" max="20" value="1"></label>
-            <label>Target (pts) <input id="p-tgt" type="number" min="1" step="0.5"></label>
-            <label>Stop-loss (pts) <input id="p-sl" type="number" min="1" step="0.5"></label>
-            <label class="p-check"><input id="p-trail" type="checkbox"> Trail SL</label>
-          </div>
-          <p id="p-preview" class="hint"></p>
-          <button id="p-buy" class="primary" disabled>📝 Paper buy</button>
-          <p id="p-msg" class="hint"></p>
-        </section>
-        <section class="card">
-          <h2>Today's practice trades</h2>
-          <div id="p-trades"></div>
-          <p class="hint">Rules: SL and target required · each trade also closes at +₹1,500 · max 3 trades a day · 30-minute cooldown after a loss ·
-            locked once today's loss (closed + open risk) would pass ₹3,000. Trail SL: at +1×SL the SL moves to entry, at +1.5×SL it locks +0.5×SL,
-            then follows 1×SL below the high.</p>
-        </section>
       </div>
 
-      <!-- ================= DATA ================= -->
+      <!-- ================= DATA & LOGS ================= -->
       <div id="tab-data" class="hidden">
+        <div class="pagehead"><h1>Data &amp; Logs</h1><p>Candle storage, data checks and what the app has been doing.</p></div>
         <section class="card">
-          <h2>Fetch candles</h2>
+          <h2>Data sync</h2>
           <p class="hint">Fetch, store and check index candles (15-min, 1-min, daily) for a date range, and compute
             each next day's levels. Max 62 days per run. Today is available after 15:31 IST.</p>
           <div class="row">
@@ -184,11 +220,11 @@
         </section>
 
         <section class="card">
-          <h2>Day check</h2>
+          <h2>Session check</h2>
           <div class="row">
             <input type="date" id="day" />
-            <button id="btn-day-prev" aria-label="Previous day">◀</button>
-            <button id="btn-day-next" aria-label="Next day">▶</button>
+            <button id="btn-day-prev" aria-label="Previous day">‹</button>
+            <button id="btn-day-next" aria-label="Next day">›</button>
           </div>
           <div id="day-check"></div>
           <div id="chart" class="chart-box"></div>
@@ -199,12 +235,12 @@
         </section>
 
         <section class="card">
-          <h2>Recent logs</h2>
+          <h2>Activity log</h2>
           <ul id="logs" class="logs"></ul>
         </section>
       </div>
-    </div>
-  </main>
+    </main>
+  </div>
 
   <div id="tooltip" class="tooltip hidden" role="status"></div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.0/dist/umd/supabase.js"></script>

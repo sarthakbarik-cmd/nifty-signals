@@ -57,7 +57,11 @@ function showTab(name) {
   $("tab-signals").classList.toggle("hidden", name !== "signals");
   $("tab-results").classList.toggle("hidden", name !== "results");
   $("tab-practice").classList.toggle("hidden", name !== "practice");
+  $("tab-guard").classList.toggle("hidden", name !== "guard");
+  window.scrollTo({ top: 0 });
   if (name === "practice") practiceOpen(); else practiceStop();
+  if (name === "guard") guardOpen();
+  if (name === "today") loadOverview();
   if (name === "data") { loadDay($("day").value); loadLogs(); }
   if (name === "signals") loadSignals();
   if (name === "results") loadResults();
@@ -94,6 +98,7 @@ async function onUser(user) {
       return;
     }
     await Promise.all([loadUpstoxStatus(), loadLevels()]);
+    loadOverview();
   } catch (e) {
     console.error(e);
     $("levels").innerHTML = `<p class="error">${esc(e.message)}</p>`;
@@ -107,6 +112,9 @@ async function loadUpstoxStatus() {
   const el = $("upstox-status");
   const exp = s?.expires_at ? new Date(s.expires_at) : null;
   const ok = Boolean(s?.logged_in && exp && exp > new Date());
+  const side = $("side-status");
+  side.className = `side-status ${ok ? "ok" : "err"}`;
+  side.textContent = ok ? "Upstox connected" : "Upstox not logged in";
   if (ok) {
     el.className = "status ok";
     el.textContent = `Logged in${s.user_name ? " as " + s.user_name : ""} · valid until ${fmtTime(exp)} IST`;
@@ -537,9 +545,9 @@ $("btn-sig-refresh").onclick = loadSignals;
 // ---------- results (Phase 4)
 const rupee = (x) => `${x < 0 ? "−" : "+"}₹${Math.round(Math.abs(x)).toLocaleString("en-IN")}`;
 const CLOSED = ["TARGET", "SL", "TIME_EXIT"];
-// Main plan B is shown above; background plans are set in app_config.settings.shadow_variants (D, E).
+// Main plan B ("Trend Rider") is shown above; background plans are set in app_config.settings.shadow_variants (D, E).
 const VARIANT_NAMES = {
-  B: "B · ATR SL, 2R (main plan)", D: "D · ATR SL, next-level target", E: "E · green–red–green, half at 1.5R + trail",
+  B: "Trend Rider · ATR SL, 2R (main plan)", D: "D · ATR SL, next-level target", E: "E · green–red–green, half at 1.5R + trail",
   A: "A · spec SL, 2R", C: "C · signal-candle SL, 2R", F: "F · half at 2R + trail", G: "G · E on trend days",
 };
 
@@ -766,6 +774,59 @@ $("x-dsave").onclick = async () => {
   catch (e) { $("x-msg").textContent = `⛔ ${e.message}`; }
   finally { $("x-dsave").disabled = false; }
 };
+
+// ---------- Overview: summary tiles, guard summary, today's setups (display only)
+async function guardOpen() {
+  try { renderPracticeState(await trader("state")); } catch (e) { $("x-msg").textContent = e.message; }
+}
+async function loadOverview() {
+  const tile = (label, value, sub, cls = "") => `<div class="tile"><span>${label}</span><b class="${cls}">${value}</b><small>${sub}</small></div>`;
+  const now = new Date(), wk = now.toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", weekday: "short" });
+  $("ov-sub").textContent = `${now.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", day: "numeric", month: "long" })} · ${
+    !["Sat", "Sun"].includes(wk) && istHm() >= "09:15" && istHm() <= "15:30" ? "Market open" : "Market closed"} · updated ${istHm()}`;
+  const tiles = ["–", "–", "–", "–"].map(() => null);
+  try {
+    const st = (await config("settings")) ?? {};
+    const trades = await rows(sb.from("signals").select("pnl_rs").in("status", CLOSED).gte("date", st.paper_start ?? "2000-01-01"));
+    const tot = trades.reduce((a, t) => a + (t.pnl_rs ?? 0), 0), wins = trades.filter((t) => (t.pnl_rs ?? 0) > 0).length;
+    tiles[0] = tile("Trend Rider · paper P&amp;L", trades.length ? rupee(tot) : "₹0", `${trades.length} trade${trades.length === 1 ? "" : "s"} · real premiums`, tot >= 0 ? "up" : "down");
+    tiles[1] = tile("Win rate", trades.length ? `${Math.round((wins / trades.length) * 100)}%` : "–", trades.length ? `Avg ${rupee(tot / trades.length)} per trade` : "No closed trades yet");
+  } catch (e) { console.error(e); }
+  let gs = null;
+  try { gs = await trader("state"); } catch (e) { console.error(e); }
+  if (gs) {
+    const g = gs.guard ?? {}, lim = g.limits ?? { loss_limit: 3000, target: 1500 };
+    const day = g.day && g.day.date === gs.date ? g.day : null, pnl = day?.pnl ?? 0;
+    tiles[2] = tile("Today · real account", day ? rupee(pnl) : "₹0",
+      `Limit −₹${num(lim.loss_limit, 0)} · ${pnl < 0 ? Math.min(100, Math.round((-pnl / lim.loss_limit) * 100)) : 0}% used`, pnl >= 0 ? "up" : "down");
+    tiles[3] = tile("Practice desk", rupee(gs.realised ?? 0), `${gs.trades.length} of ${gs.rules.max_trades} trades used`, (gs.realised ?? 0) >= 0 ? "up" : "down");
+    const pr = gs.protect ?? {}, up = pr.up && pr.up.date === gs.date ? pr.up : null, dd = pr.dhan && pr.dhan.date === gs.date ? pr.dhan : null;
+    const ex = (pr.executors ?? []).find((e) => e.paired);
+    const locked = Boolean(g.lock) || up?.mode === "LOCKED";
+    const mode = locked ? `<span class="down">● Locked</span>` : { TARGET_PROTECT: `<span class="up">● Target hit · protecting</span>`,
+      LOSS_EXIT: `<span class="down">● Loss limit · exiting</span>`, FLOOR_EXIT: `<span class="warn">● Floor · exiting</span>` }[up?.mode] ?? `<span class="up">● Normal</span>`;
+    const ago = ex?.last_seen ? Math.round((Date.now() - Date.parse(ex.last_seen)) / 1000) : null;
+    $("ov-guard").innerHTML = [
+      ["Upstox", mode],
+      ["Dhan P&amp;L Exit", dd?.pnl_exit_set ? `<span class="up">● Set</span>` : pr.dhan_token ? "waiting for market" : `<span class="warn">● Token needed</span>`],
+      ["Daily limits", `−₹${num(lim.loss_limit, 0)} / +₹${num(lim.target, 0)}`],
+      ["Guard server", !ex ? `<span class="warn">not paired</span>` : ago == null ? "paired" : ago < 120 ? `checked ${ago}s ago` : ago < 5400 ? `checked ${Math.round(ago / 60)} min ago` : `last seen ${esc(fmtTime(ex.last_seen))}`],
+    ].map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+  } else $("ov-guard").innerHTML = `<tr><td class="hint">Guard status unavailable right now.</td></tr>`;
+  $("ov-tiles").innerHTML = tiles.map((t, i) => t ?? tile(["Trend Rider · paper P&amp;L", "Win rate", "Today · real account", "Practice desk"][i], "–", "&nbsp;")).join("");
+  try {
+    const list = await rows(sb.from("signals").select("*").eq("date", istToday()).order("id", { ascending: false }).limit(8));
+    const tone = { PENDING: "warn", TRIGGERED: "ok", TARGET: "ok", SL: "err", SKIPPED: "", CANCELLED: "", TIME_EXIT: "" };
+    $("ov-setups").innerHTML = list.length ? list.map((x) => {
+      const name = x.strike ? `NIFTY ${num(x.strike, 0)} ${esc(x.side)}` : `NIFTY ${esc(x.side ?? "")}`;
+      const detail = x.pnl_rs != null ? `Premium ₹${num(x.entry_premium)} → ₹${num(x.exit_premium)} · ${esc(x.exit_reason ?? "")}`
+        : x.status === "SKIPPED" || x.status === "CANCELLED" ? esc(x.reason ?? "")
+        : `Trigger ${num(x.trigger)} · SL ${num(x.sl)} · Target ${num(x.target)} · ${esc(x.b_time)} candle`;
+      const val = x.pnl_rs != null ? `<span class="${x.pnl_rs >= 0 ? "up" : "down"}">${rupee(x.pnl_rs)}</span>` : x.r != null && x.status !== "SKIPPED" ? `${num(x.r)}R` : "—";
+      return `<div class="setup"><span><span class="pill ${tone[x.status] ?? ""}">${esc(x.status)}</span></span><div><div class="k">${name}</div><div class="d">${detail}</div></div><div class="v">${val}</div></div>`;
+    }).join("") : `<p class="hint">No setups yet today. The scanner checks after every 15-min candle (09:31–15:16); all past setups are on the Setups page.</p>`;
+  } catch (e) { $("ov-setups").innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+}
 
 if (new URLSearchParams(location.search).get("upstox") === "ok") {
   history.replaceState(null, "", location.pathname);
