@@ -56,6 +56,8 @@ function showTab(name) {
   $("tab-data").classList.toggle("hidden", name !== "data");
   $("tab-signals").classList.toggle("hidden", name !== "signals");
   $("tab-results").classList.toggle("hidden", name !== "results");
+  $("tab-practice").classList.toggle("hidden", name !== "practice");
+  if (name === "practice") practiceOpen(); else practiceStop();
   if (name === "data") { loadDay($("day").value); loadLogs(); }
   if (name === "signals") loadSignals();
   if (name === "results") loadResults();
@@ -606,6 +608,119 @@ async function loadResults() {
   }
 }
 $("btn-res-refresh").onclick = loadResults;
+
+// ---------- practice (paper) trading + real-account watcher. Paper only: no real orders anywhere.
+async function trader(action, extra = {}) {
+  const { data, error } = await sb.functions.invoke("trader", { body: { action, ...extra } });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch { /* not JSON */ }
+    throw new Error(msg);
+  }
+  return data;
+}
+const P = { u: "NIFTY", expiry: null, lot: 0, sel: null, timer: null, unders: null, busy: false };
+const istHm = () => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+const marketOpen = () => { const d = new Date().toLocaleDateString("en-US", { timeZone: "Asia/Kolkata", weekday: "short" }); const t = istHm(); return !["Sat", "Sun"].includes(d) && t >= "09:15" && t <= "15:30"; };
+const rs = (x) => `${x < 0 ? "−" : x > 0 ? "+" : ""}₹${Math.round(Math.abs(x)).toLocaleString("en-IN")}`;
+
+async function practiceOpen() {
+  try {
+    if (!P.unders) {
+      P.unders = await trader("underlyings");
+      $("p-u").innerHTML = Object.keys(P.unders).map((k) => `<option ${k === P.u ? "selected" : ""}>${k}</option>`).join("");
+      await loadExpiries();
+    }
+    await practiceRefresh();
+  } catch (e) { $("p-msg").textContent = e.message; }
+  practiceStop();
+  P.timer = setInterval(() => { if (!document.hidden && marketOpen()) practiceRefresh(); }, 3000);
+}
+function practiceStop() { if (P.timer) clearInterval(P.timer); P.timer = null; }
+async function loadExpiries() {
+  const r = await trader("expiries", { u: P.u });
+  P.expiry = r.expiries[0] ?? null; P.lot = r.lot_size;
+  $("p-exp").innerHTML = r.expiries.map((e) => `<option value="${e}">${esc(fmtDay(e))}</option>`).join("");
+  const d = P.unders[P.u]; $("p-tgt").value = d.tgt; $("p-sl").value = d.sl; P.sel = null; renderTicket();
+}
+async function practiceRefresh() {
+  if (P.busy || !P.expiry) return;
+  P.busy = true;
+  try {
+    const r = await trader("chain", { u: P.u, expiry: P.expiry });
+    $("p-spot").textContent = `${P.u} ${num(r.spot)} · lot ${P.lot} · updated ${istHm()}`;
+    const atm = r.rows.reduce((a, x) => (Math.abs(x.strike - r.spot) < Math.abs(a.strike - r.spot) ? x : a), r.rows[0] ?? { strike: 0 });
+    $("p-ladder").innerHTML = `<div class="table-wrap"><table class="signals ladder-p"><tr><th>CE</th><th>Strike</th><th>PE</th></tr>
+      ${r.rows.map((x) => `<tr class="${x.strike === atm.strike ? "atm" : ""}">
+        <td><button class="ltp" data-k="${esc(x.ce.key)}" data-s="${x.strike}" data-t="CE" data-l="${x.ce.ltp ?? ""}">${num(x.ce.ltp)}</button></td>
+        <td><b>${num(x.strike, 0)}</b></td>
+        <td><button class="ltp" data-k="${esc(x.pe.key)}" data-s="${x.strike}" data-t="PE" data-l="${x.pe.ltp ?? ""}">${num(x.pe.ltp)}</button></td></tr>`).join("")}
+    </table></div>`;
+    document.querySelectorAll("#p-ladder .ltp").forEach((b) => (b.onclick = () => {
+      P.sel = { key: b.dataset.k, strike: +b.dataset.s, side: b.dataset.t, ltp: +b.dataset.l }; renderTicket();
+    }));
+    if (P.sel) { const row = r.rows.find((x) => x.strike === P.sel.strike); if (row) P.sel.ltp = (P.sel.side === "CE" ? row.ce : row.pe).ltp; renderTicket(); }
+    renderPracticeState(r.state);
+  } catch (e) { $("p-msg").textContent = e.message; }
+  finally { P.busy = false; }
+}
+function renderTicket() {
+  const lots = +$("p-lots").value || 1, sl = +$("p-sl").value, tgt = +$("p-tgt").value, qty = lots * (P.lot || 0);
+  $("p-buy").disabled = !P.sel || !(sl > 0) || !(tgt > 0);
+  $("p-sel").innerHTML = P.sel ? `<b>${P.u} ${num(P.sel.strike, 0)} ${P.sel.side}</b> · ${esc(fmtDay(P.expiry))} · live ₹${num(P.sel.ltp)}` : "Tap a CE or PE price above to choose a contract.";
+  $("p-preview").textContent = P.sel && sl > 0 && tgt > 0
+    ? `Qty ${qty} · SL ₹${num(P.sel.ltp - sl)} (risk ≈ ₹${Math.round(sl * qty + 60).toLocaleString("en-IN")}) · Target ₹${num(P.sel.ltp + tgt)} (≈ +₹${Math.round(tgt * qty).toLocaleString("en-IN")})${$("p-trail").checked ? " · trailing on" : ""}` : "";
+}
+["p-lots", "p-sl", "p-tgt", "p-trail"].forEach((id) => ($(id).oninput = renderTicket));
+$("p-u").onchange = async () => { P.u = $("p-u").value; await loadExpiries(); practiceRefresh(); };
+$("p-exp").onchange = () => { P.expiry = $("p-exp").value; P.sel = null; renderTicket(); practiceRefresh(); };
+$("p-refresh").onclick = practiceRefresh;
+$("p-buy").onclick = async () => {
+  if (!P.sel) return;
+  $("p-buy").disabled = true; $("p-msg").textContent = "Placing paper trade…";
+  try {
+    const st = await trader("place", { u: P.u, key: P.sel.key, lots: +$("p-lots").value, tgt_pts: +$("p-tgt").value, sl_pts: +$("p-sl").value, trail: $("p-trail").checked });
+    $("p-msg").textContent = "📝 Paper trade opened."; renderPracticeState(st);
+  } catch (e) { $("p-msg").textContent = `⛔ ${e.message}`; }
+  finally { renderTicket(); }
+};
+function renderPracticeState(st) {
+  const kpi = (l, v, c = "") => `<div class="kpi"><span>${l}</span><b class="${c}">${v}</b></div>`;
+  const used = st.trades.length;
+  $("p-kpis").innerHTML = [
+    kpi("Practice P&L today", rs(st.realised), st.realised >= 0 ? "up" : "down"),
+    kpi("Trades", `${used} / ${st.rules.max_trades}`),
+    kpi("Loss budget left", `₹${num(st.budget_left, 0)}`),
+    kpi("Open risk", `₹${num(st.open_risk, 0)}`),
+  ].join("");
+  $("p-blocked").classList.toggle("hidden", !st.blocked);
+  $("p-blocked").textContent = st.blocked ? `🔒 ${st.blocked}` : "";
+  const label = { OPEN: "warn", TARGET: "ok", CAP: "ok", TRAIL: "ok", BREAKEVEN: "", SL: "err", MANUAL: "", TIME: "" };
+  $("p-trades").innerHTML = st.trades.length ? `<div class="table-wrap"><table class="signals">
+    <tr><th>Contract</th><th>Status</th><th>Entry</th><th>LTP / exit</th><th>SL · target</th><th>P&amp;L</th><th></th></tr>
+    ${st.trades.slice().reverse().map((t) => {
+      const px = t.status === "OPEN" ? t.last_price : t.exit_price;
+      const pnl = t.status === "OPEN" ? (t.last_price - t.entry_price) * t.qty : t.pnl_rs;
+      return `<tr><td>${esc(t.symbol ?? "")}<br><span class="hint">${t.lots} lot · ${new Date(t.entry_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false })}${t.trail ? " · trail" : ""}</span></td>
+        <td><span class="pill ${label[t.status] ?? ""}">${esc(t.status)}</span></td><td>₹${num(t.entry_price)}</td><td>₹${num(px)}</td>
+        <td>₹${num(t.sl_price)} · ₹${num(t.target_price)}</td><td class="${pnl >= 0 ? "up" : "down"}"><b>${rs(pnl)}</b></td>
+        <td>${t.status === "OPEN" ? `<button class="p-close" data-id="${t.id}">Close</button>` : ""}</td></tr>`;
+    }).join("")}</table></div>` : `<p class="hint">No practice trades today.</p>`;
+  document.querySelectorAll(".p-close").forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { renderPracticeState(await trader("close", { id: +b.dataset.id })); } catch (e) { $("p-msg").textContent = e.message; }
+  }));
+  const g = st.guard ?? {}, day = g.day && g.day.date === st.date ? g.day : null, lim = g.limits ?? { loss_limit: 3000, target: 1500 };
+  const locked = Boolean(g.lock) || day?.locked_by_app;
+  $("g-status").className = `pill ${locked ? "err" : "ok"}`;
+  $("g-status").textContent = locked ? "🔒 F&O locked" : "🟢 watching";
+  $("g-kpis").innerHTML = [
+    kpi("Real P&L today", day ? rs(day.pnl ?? 0) : "–", (day?.pnl ?? 0) >= 0 ? "up" : "down"),
+    kpi("Loss limit", `−₹${num(lim.loss_limit, 0)}`), kpi("Target", `+₹${num(lim.target, 0)}`),
+    kpi("Last check", day?.at ?? "–"),
+    kpi("Lock", g.lock ? `since ${fmtTime(g.lock.locked_at)} · unlocks next trading morning` : "none"),
+  ].join("");
+}
 
 if (new URLSearchParams(location.search).get("upstox") === "ok") {
   history.replaceState(null, "", location.pathname);

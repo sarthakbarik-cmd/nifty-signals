@@ -35,6 +35,7 @@
         <button role="tab" data-tab="today" aria-selected="true">Today</button>
         <button role="tab" data-tab="signals" aria-selected="false">Signals</button>
         <button role="tab" data-tab="results" aria-selected="false">Results</button>
+        <button role="tab" data-tab="practice" aria-selected="false">Practice</button>
         <button role="tab" data-tab="data" aria-selected="false">Data</button>
       </nav>
 
@@ -104,6 +105,48 @@
           <p class="hint">Each day is replayed after the close through the background plans (now D and E), in R (1R = the trade's risk).
             “12-month backtest” is the same plan over Nov 2025 – Nov 2026, for comparison.</p>
           <div id="res-variants"></div>
+        </section>
+      </div>
+
+      <!-- ================= PRACTICE ================= -->
+      <div id="tab-practice" class="hidden">
+        <section class="card">
+          <div class="card-head"><h2>Real account watcher</h2><span id="g-status" class="pill">–</span></div>
+          <p class="hint">Reads your real Upstox P&amp;L every minute (09:15–15:30). At the daily limit it locks NSE &amp; BSE F&amp;O with
+            Upstox's Kill Switch (once you have no open F&amp;O position) and unlocks it automatically the next trading morning.
+            It never places, changes or cancels an order.</p>
+          <div id="g-kpis" class="kpis"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Practice trading <span class="pill">📝 paper</span></h2><button id="p-refresh">Refresh</button></div>
+          <div id="p-kpis" class="kpis"></div>
+          <p id="p-blocked" class="error hidden"></p>
+          <div class="p-controls">
+            <label>Index <select id="p-u"></select></label>
+            <label>Expiry <select id="p-exp"></select></label>
+            <span id="p-spot" class="hint"></span>
+          </div>
+          <div id="p-ladder"></div>
+        </section>
+        <section class="card" id="p-ticket-card">
+          <h2>Order ticket</h2>
+          <p id="p-sel" class="hint">Tap a CE or PE price above to choose a contract.</p>
+          <div class="p-ticket">
+            <label>Lots <input id="p-lots" type="number" min="1" max="20" value="1"></label>
+            <label>Target (pts) <input id="p-tgt" type="number" min="1" step="0.5"></label>
+            <label>Stop-loss (pts) <input id="p-sl" type="number" min="1" step="0.5"></label>
+            <label class="p-check"><input id="p-trail" type="checkbox"> Trail SL</label>
+          </div>
+          <p id="p-preview" class="hint"></p>
+          <button id="p-buy" class="primary" disabled>📝 Paper buy</button>
+          <p id="p-msg" class="hint"></p>
+        </section>
+        <section class="card">
+          <h2>Today's practice trades</h2>
+          <div id="p-trades"></div>
+          <p class="hint">Rules: SL and target required · each trade also closes at +₹1,500 · max 3 trades a day · 30-minute cooldown after a loss ·
+            locked once today's loss (closed + open risk) would pass ₹3,000. Trail SL: at +1×SL the SL moves to entry, at +1.5×SL it locks +0.5×SL,
+            then follows 1×SL below the high.</p>
         </section>
       </div>
 

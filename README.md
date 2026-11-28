@@ -111,3 +111,14 @@ cd supabase && deno test --allow-read tests/
 - Settings live in `app_config.settings` (`sl_mode`, `paper_mode`, `daily_loss_limit_rs`, `cost_per_trade`, `paper_start`).
 - Dashboard **Results** tab: KPIs, closed paper trades, background variants vs the 12-month backtest.
 - Research tables: `backtest_trades` (12-month backtest), `participant_oi` + `nifty_eod` (FII test — no next-day edge found).
+
+## Practice trading + real-account discipline watcher (`trader` function)
+
+- **Practice tab (paper only):** live option prices for NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, SENSEX, BANKEX; tap a CE/PE price,
+  set lots, target and SL (required; defaults Nifty 20/10, Bank Nifty & Sensex 40/20), optional step-trailing SL.
+  Rules enforced on the server: each trade closes at +₹1,500 · max 3 trades a day · 30-min cooldown after a loss ·
+  no trade that could take today's loss (closed + open risk) past ₹3,000. Table `practice_trades`.
+- **Real account watcher (cron `guard`, every minute 09:00–15:30):** reads Upstox positions (read-only); Telegram alerts at 50% / 80%
+  of the −₹3,000 limit; at −₹3,000 or +₹1,500 it switches on Upstox's **Kill Switch** for NSE_FO + BSE_FO as soon as no F&O position
+  is open (Upstox requires that), and unlocks the next trading morning after the 12-hour cooling period.
+  The app still never places, modifies or cancels an order. State: `app_config` keys `guard_day`, `guard_lock`.
